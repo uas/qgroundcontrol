@@ -29,14 +29,14 @@ namespace mapcontrol
 {
     WayPointItem::WayPointItem(const internals::PointLatLng &coord,double const& altitude, MapGraphicItem *map) :
         map(map),
+        autoreachedEnabled(true),
         coord(coord),
         reached(false),
         description(""),
         shownumber(true),
         isDragging(false),
         altitude(altitude),
-        heading(0),
-        autoreachedEnabled(true)
+        heading(0)
     {
         text=0;
         numberI=0;
@@ -52,7 +52,15 @@ namespace mapcontrol
         RefreshToolTip();
         RefreshPos();
     }
-    WayPointItem::WayPointItem(const internals::PointLatLng &coord,double const& altitude, const QString &description, MapGraphicItem *map):coord(coord),reached(false),description(description),shownumber(true),isDragging(false),altitude(altitude),heading(0),map(map)
+    WayPointItem::WayPointItem(const internals::PointLatLng &coord,double const& altitude, const QString &description, MapGraphicItem *map) :
+        map(map),
+        coord(coord),
+        reached(false),
+        description(description),
+        shownumber(true),
+        isDragging(false),
+        altitude(altitude),
+        heading(0)
     {
         text=0;
         numberI=0;

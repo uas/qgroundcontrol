@@ -71,7 +71,8 @@ LinechartWidget::LinechartWidget(int systemid, QWidget *parent) : QWidget(parent
     logindex(1),
     logging(false),
     logStartTime(0),
-    updateTimer(new QTimer())
+    updateTimer(new QTimer()),
+    selectedMAV(-1)
 {
     // Add elements defined in Qt Designer
     ui.setupUi(this);
@@ -152,6 +153,8 @@ LinechartWidget::~LinechartWidget()
 {
     writeSettings();
     stopLogging();
+    if (activePlot) delete activePlot;
+    activePlot = NULL;
     delete listedCurves;
     listedCurves = NULL;
 }
@@ -183,6 +186,7 @@ void LinechartWidget::readSettings()
     if (activePlot) {
         timeButton->setChecked(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
         activePlot->enforceGroundTime(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
+        timeButton->setChecked(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
     }
     if (unitsCheckBox) unitsCheckBox->setChecked(settings.value("SHOW_UNITS", unitsCheckBox->isChecked()).toBool());
     if (ui.shortNameCheckBox) ui.shortNameCheckBox->setChecked(settings.value("SHORT_NAMES", ui.shortNameCheckBox->isChecked()).toBool());
@@ -257,9 +261,6 @@ void LinechartWidget::createLayout()
     timeButton->setText(tr("Ground Time"));
     timeButton->setToolTip(tr("Overwrite timestamp of data from vehicle with ground receive time. Helps if the plots are not visible because of missing or invalid onboard time."));
     timeButton->setWhatsThis(tr("Overwrite timestamp of data from vehicle with ground receive time. Helps if the plots are not visible because of missing or invalid onboard time."));
-    bool gTimeDefault = true;
-    if (activePlot) activePlot->enforceGroundTime(gTimeDefault);
-    timeButton->setChecked(gTimeDefault);
     layout->addWidget(timeButton, 1, 4);
     layout->setColumnStretch(4, 0);
     connect(timeButton, SIGNAL(clicked(bool)), activePlot, SLOT(enforceGroundTime(bool)));
@@ -296,20 +297,25 @@ void LinechartWidget::createLayout()
 void LinechartWidget::appendData(int uasId, QString curve, double value, quint64 usec)
 {
     static const QString unit("-");
-    if (isVisible()) {
+    if ((selectedMAV == -1 && isVisible()) || (selectedMAV == uasId && isVisible()))
+    {
         // Order matters here, first append to plot, then update curve list
         activePlot->appendData(curve+unit, usec, value);
         // Store data
         QLabel* label = curveLabels->value(curve+unit, NULL);
         // Make sure the curve will be created if it does not yet exist
-        if(!label) {
+        if(!label)
+        {
             addCurve(curve, unit);
         }
     }
 
     // Log data
-    if (logging) {
-        if (activePlot->isVisible(curve+unit)) {
+    if (logging)
+    {
+        if (activePlot->isVisible(curve+unit))
+        {
+            if (usec == 0) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
@@ -323,21 +329,26 @@ void LinechartWidget::appendData(int uasId, QString curve, double value, quint64
 
 void LinechartWidget::appendData(int uasId, const QString& curve, const QString& unit, double value, quint64 usec)
 {
-    if (isVisible()) {
+    if ((selectedMAV == -1 && isVisible()) || (selectedMAV == uasId && isVisible()))
+    {
         // Order matters here, first append to plot, then update curve list
         activePlot->appendData(curve+unit, usec, value);
         // Store data
         QLabel* label = curveLabels->value(curve+unit, NULL);
         // Make sure the curve will be created if it does not yet exist
-        if(!label) {
+        if(!label)
+        {
             //qDebug() << "ADDING CURVE IN APPENDDATE DOUBLE";
             addCurve(curve, unit);
         }
     }
 
     // Log data
-    if (logging) {
-        if (activePlot->isVisible(curve+unit)) {
+    if (logging)
+    {
+        if (activePlot->isVisible(curve+unit))
+        {
+            if (usec == 0) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
@@ -350,13 +361,25 @@ void LinechartWidget::appendData(int uasId, const QString& curve, const QString&
 
 void LinechartWidget::appendData(int uasId, const QString& curve, const QString& unit, int value, quint64 usec)
 {
-    if (isVisible()) {
+    appendData(uasId, curve, unit, static_cast<qint64>(value), usec);
+}
+
+void LinechartWidget::appendData(int uasId, const QString& curve, const QString& unit, unsigned int value, quint64 usec)
+{
+    appendData(uasId, curve, unit, static_cast<quint64>(value), usec);
+}
+
+void LinechartWidget::appendData(int uasId, const QString& curve, const QString& unit, qint64 value, quint64 usec)
+{
+    if ((selectedMAV == -1 && isVisible()) || (selectedMAV == uasId && isVisible()))
+    {
         // Order matters here, first append to plot, then update curve list
         activePlot->appendData(curve+unit, usec, value);
         // Store data
         QLabel* label = curveLabels->value(curve+unit, NULL);
         // Make sure the curve will be created if it does not yet exist
-        if(!label) {
+        if(!label)
+        {
             intData.insert(curve+unit, 0);
             addCurve(curve, unit);
         }
@@ -366,8 +389,46 @@ void LinechartWidget::appendData(int uasId, const QString& curve, const QString&
     }
 
     // Log data
-    if (logging) {
-        if (activePlot->isVisible(curve+unit)) {
+    if (logging)
+    {
+        if (activePlot->isVisible(curve+unit))
+        {
+            if (usec == 0) usec = QGC::groundTimeMilliseconds();
+            if (logStartTime == 0) logStartTime = usec;
+            qint64 time = usec - logStartTime;
+            if (time < 0) time = 0;
+
+            logFile->write(QString(QString::number(time) + "\t" + QString::number(uasId) + "\t" + curve + "\t" + QString::number(value) + "\n").toLatin1());
+            logFile->flush();
+        }
+    }
+}
+
+void LinechartWidget::appendData(int uasId, const QString& curve, const QString& unit, quint64 value, quint64 usec)
+{
+    if ((selectedMAV == -1 && isVisible()) || (selectedMAV == uasId && isVisible()))
+    {
+        // Order matters here, first append to plot, then update curve list
+        activePlot->appendData(curve+unit, usec, value);
+        // Store data
+        QLabel* label = curveLabels->value(curve+unit, NULL);
+        // Make sure the curve will be created if it does not yet exist
+        if(!label)
+        {
+            intData.insert(curve+unit, 0);
+            addCurve(curve, unit);
+        }
+
+        // Add int data
+        intData.insert(curve+unit, value);
+    }
+
+    // Log data
+    if (logging)
+    {
+        if (activePlot->isVisible(curve+unit))
+        {
+            if (usec == 0) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
@@ -584,7 +645,7 @@ void LinechartWidget::addCurve(const QString& curve, const QString& unit)
     curvesWidgetLayout->addWidget(label, labelRow, 2);
 
     //checkBox->setText(QString());
-    label->setText(curve);
+    label->setText(getCurveName(curve+unit, ui.shortNameCheckBox->isChecked()));
     QColor color(Qt::gray);// = plot->getColorForCurve(curve+unit);
     QString colorstyle;
     colorstyle = colorstyle.sprintf("QWidget { background-color: #%X%X%X; }", color.red(), color.green(), color.blue());
@@ -713,54 +774,70 @@ void LinechartWidget::recolor()
     }
 }
 
+QString LinechartWidget::getCurveName(const QString& key, bool shortEnabled)
+{
+    if (shortEnabled)
+    {
+        QString name;
+        QStringList parts = curveNames.value(key).split(".");
+        if (parts.length() > 1)
+        {
+            name = parts.at(1);
+        }
+        else
+        {
+            name = parts.at(0);
+        }
+
+        const int sizeLimit = 20;
+
+        // Replace known words with abbreviations
+        if (name.length() > sizeLimit)
+        {
+            name.replace("gyroscope", "gyro");
+            name.replace("accelerometer", "acc");
+            name.replace("magnetometer", "mag");
+            name.replace("distance", "dist");
+            name.replace("ailerons", "ail");
+            name.replace("altitude", "alt");
+            name.replace("waypoint", "wp");
+            name.replace("throttle", "thr");
+            name.replace("elevator", "elev");
+            name.replace("rudder", "rud");
+            name.replace("error", "err");
+            name.replace("version", "ver");
+            name.replace("message", "msg");
+            name.replace("count", "cnt");
+            name.replace("value", "val");
+            name.replace("source", "src");
+            name.replace("index", "idx");
+            name.replace("type", "typ");
+            name.replace("mode", "mod");
+        }
+
+        // Check if sub-part is still exceeding N chars
+        if (name.length() > sizeLimit)
+        {
+            name.replace("a", "");
+            name.replace("e", "");
+            name.replace("i", "");
+            name.replace("o", "");
+            name.replace("u", "");
+        }
+
+        return name;
+    }
+    else
+    {
+        return curveNames.value(key);
+    }
+}
+
 void LinechartWidget::setShortNames(bool enable)
 {
     foreach (QString key, curveNames.keys())
     {
-        QString name;
-        if (enable)
-        {
-            QStringList parts = curveNames.value(key).split(".");
-            if (parts.length() > 1)
-            {
-                name = parts.at(1);
-            }
-            else
-            {
-                name = parts.at(0);
-            }
-
-            const unsigned int sizeLimit = 10;
-
-            // Replace known words with abbreviations
-            if (name.length() > sizeLimit)
-            {
-                name.replace("gyroscope", "gyro");
-                name.replace("accelerometer", "acc");
-                name.replace("magnetometer", "mag");
-                name.replace("distance", "dist");
-                name.replace("altitude", "alt");
-                name.replace("waypoint", "wp");
-                name.replace("error", "err");
-                name.replace("message", "msg");
-                name.replace("source", "src");
-            }
-
-            // Check if sub-part is still exceeding N chars
-            if (name.length() > sizeLimit)
-            {
-                name.replace("a", "");
-                name.replace("e", "");
-                name.replace("i", "");
-                name.replace("o", "");
-                name.replace("u", "");
-            }
-        }
-        else
-        {
-            name = curveNames.value(key);
-        }
-        curveNameLabels.value(key)->setText(name);
+        curveNameLabels.value(key)->setText(getCurveName(key, enable));
     }
 }
 

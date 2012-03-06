@@ -2,6 +2,7 @@
 #include <QTextBrowser>
 #include <QMessageBox>
 #include <QSettings>
+#include <QDesktopServices>
 
 #include "XMLCommProtocolWidget.h"
 #include "ui_XMLCommProtocolWidget.h"
@@ -39,21 +40,26 @@ void XMLCommProtocolWidget::selectXMLFile()
     dialog.setFilter(tr("MAVLink XML (*.xml)"));
     dialog.setViewMode(QFileDialog::Detail);
     QStringList fileNames;
-    if (dialog.exec()) {
+    if (dialog.exec())
+    {
         fileNames = dialog.selectedFiles();
     }
 	
-    if (fileNames.size() > 0) {
-        m_ui->fileNameLabel->setText(fileNames.first());
+    if (fileNames.size() > 0)
+    {
         QFile file(fileNames.first());
+        m_ui->fileNameLabel->setText(file.fileName());
 		
-        if (file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        if (file.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
             const QString instanceText(QString::fromUtf8(file.readAll()));
             setXML(instanceText);
             // Store filename for next time
             settings.setValue(mavlinkXML, QFileInfo(file).absoluteFilePath());
             settings.sync();
-        } else {
+        }
+        else
+        {
             QMessageBox msgBox;
             msgBox.setText("Could not read XML file. Permission denied");
             msgBox.exec();
@@ -66,39 +72,33 @@ void XMLCommProtocolWidget::setXML(const QString& xml)
     m_ui->xmlTextView->setText(xml);
     QDomDocument doc;
 	
-    if (doc.setContent(xml)) {
+    if (doc.setContent(xml))
+    {
         m_ui->validXMLLabel->setText(tr("<font color=\"green\">Valid XML file</font>"));
-    } else {
+    }
+    else
+    {
         m_ui->validXMLLabel->setText(tr("<font color=\"red\">File is NOT valid XML, please fix in editor</font>"));
     }
-	
-    if (model != NULL) {
-        m_ui->xmlTreeView->reset();
-        //delete model;
-    }
-    model = new DomModel(doc, this);
-    m_ui->xmlTreeView->setModel(model);
-    // Expand the tree so that message names are visible
-    m_ui->xmlTreeView->expandToDepth(1);
-    m_ui->xmlTreeView->hideColumn(2);
-    m_ui->xmlTreeView->repaint();
 }
 
 void XMLCommProtocolWidget::selectOutputDirectory()
 {
     QSettings settings("MAVLink Consortium", "MAVLink Generator");
     const QString mavlinkOutputDir = "MAVLINK_OUTPUT_DIR";
-    QString dirPath = settings.value(mavlinkOutputDir, QCoreApplication::applicationDirPath() + "../").toString();
+    QString dirPath = settings.value(mavlinkOutputDir, QDesktopServices::DesktopLocation).toString();
     QFileDialog dialog;
     dialog.setDirectory(dirPath);
     dialog.setFileMode(QFileDialog::Directory);
     dialog.setViewMode(QFileDialog::Detail);
     QStringList fileNames;
-    if (dialog.exec()) {
+    if (dialog.exec())
+    {
         fileNames = dialog.selectedFiles();
     }
 	
-    if (fileNames.size() > 0) {
+    if (fileNames.size() > 0)
+    {
         m_ui->outputDirNameLabel->setText(fileNames.first());
         // Store directory for next time
         settings.setValue(mavlinkOutputDir, QFileInfo(fileNames.first()).absoluteFilePath());
@@ -110,13 +110,15 @@ void XMLCommProtocolWidget::selectOutputDirectory()
 void XMLCommProtocolWidget::generate()
 {
     // Check if input file is present
-    if (!QFileInfo(m_ui->fileNameLabel->text().trimmed()).isFile()) {
+    if (!QFileInfo(m_ui->fileNameLabel->text().trimmed()).isFile())
+    {
         QMessageBox::critical(this, tr("Please select an XML input file first"), tr("You have to select an input XML file before generating C files."), QMessageBox::Ok);
         return;
     }
 	
     // Check if output dir is selected
-    if (!QFileInfo(m_ui->outputDirNameLabel->text().trimmed()).isDir()) {
+    if (!QFileInfo(m_ui->outputDirNameLabel->text().trimmed()).isDir())
+    {
         QMessageBox::critical(this, tr("Please select output directory first"), tr("You have to select an output directory before generating C files."), QMessageBox::Ok);
         return;
     }
@@ -138,13 +140,13 @@ void XMLCommProtocolWidget::generate()
 
     bool result = false;
 
-    if (m_ui->versionComboBox->currentIndex() == 0)
+    if (m_ui->versionComboBox->currentIndex() == 1)
     {
         MAVLinkXMLParser* parser = new MAVLinkXMLParser(m_ui->fileNameLabel->text().trimmed(), m_ui->outputDirNameLabel->text().trimmed());
         connect(parser, SIGNAL(parseState(QString)), m_ui->compileLog, SLOT(appendHtml(QString)));
         result = parser->generate();
     }
-    else if (m_ui->versionComboBox->currentIndex() == 1)
+    else if (m_ui->versionComboBox->currentIndex() == 0)
     {
         MAVLinkXMLParserV10* parserV10 = new MAVLinkXMLParserV10(m_ui->fileNameLabel->text().trimmed(), m_ui->outputDirNameLabel->text().trimmed());
         connect(parserV10, SIGNAL(parseState(QString)), m_ui->compileLog, SLOT(appendHtml(QString)));

@@ -44,7 +44,7 @@ This file is part of the QGROUNDCONTROL project
  * This class keeps a list of all connected / configured UASs. It also stores which
  * UAS is currently select with respect to user input or manual controls.
  **/
-class UASManager : public QThread
+class UASManager : public QObject
 {
     Q_OBJECT
 
@@ -52,7 +52,6 @@ public:
     static UASManager* instance();
     ~UASManager();
 
-    void run();
     /**
      * @brief Get the currently selected UAS
      *
@@ -85,12 +84,22 @@ public:
         return homeAlt;
     }
 
+    /** @brief Get the home position coordinate frame */
+    int getHomeFrame() const
+    {
+        return homeFrame;
+    }
+
     /** @brief Convert WGS84 coordinates to earth centric frame */
     Eigen::Vector3d wgs84ToEcef(const double & latitude, const double & longitude, const double & altitude);
     /** @brief Convert earth centric frame to EAST-NORTH-UP frame (x-y-z directions */
     Eigen::Vector3d ecefToEnu(const Eigen::Vector3d & ecef);
     /** @brief Convert WGS84 lat/lon coordinates to carthesian coordinates with home position as origin */
     void wgs84ToEnu(const double& lat, const double& lon, const double& alt, double* east, double* north, double* up);
+    /** @brief Convert x,y,z coordinates to lat / lon / alt coordinates in east-north-up frame */
+    void enuToWgs84(const double& x, const double& y, const double& z, double* lat, double* lon, double* alt);
+    /** @brief Convert x,y,z coordinates to lat / lon / alt coordinates in north-east-down frame */
+    void nedToWgs84(const double& x, const double& y, const double& z, double* lat, double* lon, double* alt);
 
     void getLocalNEDSafetyLimits(double* x1, double* y1, double* z1, double* x2, double* y2, double* z2)
     {
@@ -239,6 +248,7 @@ protected:
     double homeLat;
     double homeLon;
     double homeAlt;
+    int homeFrame;
     Eigen::Quaterniond ecef_ref_orientation_;
     Eigen::Vector3d ecef_ref_point_;
     Eigen::Vector3d nedSafetyLimitPosition1;
@@ -247,6 +257,7 @@ protected:
     void initReference(const double & latitude, const double & longitude, const double & altitude);
 
 signals:
+
     void UASCreated(UASInterface* UAS);
     /** @brief The UAS currently under main operator control changed */
     void activeUASSet(UASInterface* UAS);

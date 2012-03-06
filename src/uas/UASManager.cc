@@ -18,6 +18,10 @@
 #include "UASManager.h"
 #include "QGC.h"
 
+#define PI 3.1415926535897932384626433832795
+#define MEAN_EARTH_DIAMETER	12756274.0
+#define UMR	0.017453292519943295769236907684886
+
 UASManager* UASManager::instance()
 {
     static UASManager* _instance = 0;
@@ -181,6 +185,22 @@ void UASManager::wgs84ToEnu(const double& lat, const double& lon, const double& 
 //}
 
 
+
+void UASManager::enuToWgs84(const double& x, const double& y, const double& z, double* lat, double* lon, double* alt)
+{
+    *lat=homeLat+y/MEAN_EARTH_DIAMETER*360./PI;
+    *lon=homeLon+x/MEAN_EARTH_DIAMETER*360./PI/cos(homeLat*UMR);
+    *alt=homeAlt+z;
+}
+
+void UASManager::nedToWgs84(const double& x, const double& y, const double& z, double* lat, double* lon, double* alt)
+{
+    *lat=homeLat+x/MEAN_EARTH_DIAMETER*360./PI;
+    *lon=homeLon+y/MEAN_EARTH_DIAMETER*360./PI/cos(homeLat*UMR);
+    *alt=homeAlt-z;
+}
+
+
 /**
  * This function will change QGC's home position on a number of conditions only
  */
@@ -214,9 +234,9 @@ UASManager::UASManager() :
         activeUAS(NULL),
         homeLat(47.3769),
         homeLon(8.549444),
-        homeAlt(470.0)
+        homeAlt(470.0),
+        homeFrame(MAV_FRAME_GLOBAL)
 {
-    start(QThread::LowPriority);
     loadSettings();
     setLocalNEDSafetyBorders(1, -1, 0, -1, 1, -1);
 }
@@ -230,16 +250,6 @@ UASManager::~UASManager()
     }
 }
 
-
-void UASManager::run()
-{
-    //    forever
-    //    {
-    //        QGC::SLEEP::msleep(5000);
-    //    }
-    exec();
-}
-
 void UASManager::addUAS(UASInterface* uas)
 {
     // WARNING: The active uas is set here
@@ -248,13 +258,15 @@ void UASManager::addUAS(UASInterface* uas)
     // returns the UAS once the UASCreated() signal
     // is emitted. The code is thus NOT redundant.
     bool firstUAS = false;
-    if (activeUAS == NULL) {
+    if (activeUAS == NULL)
+    {
         firstUAS = true;
         activeUAS = uas;
     }
 
     // Only execute if there is no UAS at this index
-    if (!systems.contains(uas)) {
+    if (!systems.contains(uas))
+    {
         systems.append(uas);
         connect(uas, SIGNAL(destroyed(QObject*)), this, SLOT(removeUAS(QObject*)));
         // Set home position on UAV if set in UI
@@ -265,7 +277,8 @@ void UASManager::addUAS(UASInterface* uas)
     }
 
     // If there is no active UAS yet, set the first one as the active UAS
-    if (firstUAS) {
+    if (firstUAS)
+    {
         setActiveUAS(uas);
     }
 }

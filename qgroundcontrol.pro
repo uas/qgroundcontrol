@@ -19,6 +19,8 @@
 
 
 # Qt configuration
+CONFIG += qt \
+	thread
 QT += network \
     opengl \
     svg \
@@ -29,15 +31,26 @@ QT += network \
 
 TEMPLATE = app
 TARGET = qgroundcontrol
-BASEDIR = $$IN_PWD
-TARGETDIR = $$OUT_PWD
-BUILDDIR = $$TARGETDIR/build
+BASEDIR = $${IN_PWD}
+TARGETDIR = $${OUT_PWD}
+BUILDDIR = $${TARGETDIR}/build
 LANGUAGE = C++
-OBJECTS_DIR = $$BUILDDIR/obj
-MOC_DIR = $$BUILDDIR/moc
-UI_HEADERS_DIR = $$BUILDDIR/ui
-RCC_DIR = $$BUILDDIR/rcc
+OBJECTS_DIR = $${BUILDDIR}/obj
+MOC_DIR = $${BUILDDIR}/moc
+UI_DIR = $${BUILDDIR}/ui
+RCC_DIR = $${BUILDDIR}/rcc
 MAVLINK_CONF = ""
+DEFINES += MAVLINK_NO_DATA
+
+win32 {
+QMAKE_INCDIR_QT = $$(QTDIR)/include
+QMAKE_LIBDIR_QT = $$(QTDIR)/lib
+QMAKE_UIC = "$$(QTDIR)/bin/uic.exe"
+QMAKE_MOC = "$$(QTDIR)/bin/moc.exe"
+QMAKE_RCC = "$$(QTDIR)/bin/rcc.exe"
+QMAKE_QMAKE = "$$(QTDIR)/bin/qmake.exe"
+}
+
 
 
 #################################################################
@@ -82,7 +95,7 @@ contains(MAVLINK_CONF, pixhawk) {
     # Remove the default set - it is included anyway
     INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
     INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
-    
+
     # PIXHAWK SPECIAL MESSAGES
     INCLUDEPATH += $$BASEDIR/../mavlink/include/pixhawk
     INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/pixhawk
@@ -117,6 +130,16 @@ contains(MAVLINK_CONF, ardupilotmega) {
     INCLUDEPATH += $$BASEDIR/../mavlink/include/ardupilotmega
     INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/ardupilotmega
     DEFINES += QGC_USE_ARDUPILOTMEGA_MESSAGES
+}
+contains(MAVLINK_CONF, senseSoar) { 
+    # Remove the default set - it is included anyway
+    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
+    INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
+    
+    # SENSESOAR SPECIAL MESSAGES
+    INCLUDEPATH += $$BASEDIR/../mavlink/include/SenseSoar
+    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/SenseSoar
+    DEFINES += QGC_USE_SENSESOAR_MESSAGES
 }
 
 
@@ -157,9 +180,11 @@ INCLUDEPATH += . \
 include(thirdParty/qserialport/qgroundcontrol-qserialport.pri)
 
 # Serial port detection (ripped-off from qextserialport library)
-macx::SOURCES += src/libs/qextserialport/qextserialenumerator_osx.cpp
+macx|macx-g++|macx-g++42::SOURCES += src/libs/qextserialport/qextserialenumerator_osx.cpp
 linux-g++::SOURCES += src/libs/qextserialport/qextserialenumerator_unix.cpp
+linux-g++-64::SOURCES += src/libs/qextserialport/qextserialenumerator_unix.cpp
 win32::SOURCES += src/libs/qextserialport/qextserialenumerator_win.cpp
+win32-msvc2008|win32-msvc2010::SOURCES += src/libs/qextserialport/qextserialenumerator_win.cpp
 
 # Input
 FORMS += src/ui/MainWindow.ui \
@@ -171,8 +196,7 @@ FORMS += src/ui/MainWindow.ui \
     src/ui/Linechart.ui \
     src/ui/UASView.ui \
     src/ui/ParameterInterface.ui \
-    src/ui/WaypointList.ui \
-    src/ui/WaypointView.ui \
+    src/ui/WaypointList.ui \    
     src/ui/ObjectDetectionView.ui \
     src/ui/JoystickWidget.ui \
     src/ui/DebugConsole.ui \
@@ -207,7 +231,15 @@ FORMS += src/ui/MainWindow.ui \
     src/ui/mission/QGCMissionDoWidget.ui \
     src/ui/mission/QGCMissionConditionWidget.ui \
     src/ui/map/QGCMapTool.ui \
-    src/ui/map/QGCMapToolBar.ui
+    src/ui/map/QGCMapToolBar.ui \
+    src/ui/QGCMAVLinkInspector.ui \
+    src/ui/WaypointViewOnlyView.ui \    
+    src/ui/WaypointEditableView.ui \    
+    src/ui/UnconnectedUASInfoWidget.ui \
+    src/ui/mavlink/QGCMAVLinkMessageSender.ui \
+    src/ui/firmwareupdate/QGCFirmwareUpdateWidget.ui \
+    src/ui/QGCPluginHost.ui \
+    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.ui
 INCLUDEPATH += src \
     src/ui \
     src/ui/linechart \
@@ -232,10 +264,8 @@ HEADERS += src/MG.h \
     src/comm/LinkInterface.h \
     src/comm/SerialLinkInterface.h \
     src/comm/SerialLink.h \
-    src/comm/SerialSimulationLink.h \
     src/comm/ProtocolInterface.h \
     src/comm/MAVLinkProtocol.h \
-    src/comm/AS4Protocol.h \
     src/comm/QGCFlightGearLink.h \
     src/ui/CommConfigurationWindow.h \
     src/ui/SerialConfigurationWindow.h \
@@ -255,8 +285,7 @@ HEADERS += src/MG.h \
     src/comm/UDPLink.h \
     src/ui/ParameterInterface.h \
     src/ui/WaypointList.h \
-    src/Waypoint.h \
-    src/ui/WaypointView.h \
+    src/Waypoint.h \   
     src/ui/ObjectDetectionView.h \
     src/input/JoystickInput.h \
     src/ui/JoystickWidget.h \
@@ -272,6 +301,7 @@ HEADERS += src/MG.h \
     src/uas/SlugsMAV.h \
     src/uas/PxQuadMAV.h \
     src/uas/ArduPilotMegaMAV.h \
+    src/uas/senseSoarMAV.h \
     src/ui/watchdog/WatchdogControl.h \
     src/ui/watchdog/WatchdogProcessView.h \
     src/ui/watchdog/WatchdogView.h \
@@ -300,7 +330,6 @@ HEADERS += src/MG.h \
     src/ui/uas/QGCUnconnectedInfoWidget.h \
     src/ui/designer/QGCToolWidget.h \
     src/ui/designer/QGCParamSlider.h \
-    src/ui/designer/QGCActionButton.h \
     src/ui/designer/QGCCommandButton.h \
     src/ui/designer/QGCToolWidgetItem.h \
     src/ui/QGCMAVLinkLogPlayer.h \
@@ -322,10 +351,21 @@ HEADERS += src/MG.h \
     src/libs/qextserialport/qextserialenumerator.h \
     src/QGCGeo.h \
     src/ui/QGCToolBar.h \
-    src/ui/linechart/QGCLineChartCurveLabel.h
+    src/ui/QGCMAVLinkInspector.h \
+    src/ui/MAVLinkDecoder.h \
+    src/ui/WaypointViewOnlyView.h \
+    src/ui/WaypointViewOnlyView.h \
+    src/ui/WaypointEditableView.h \    
+    src/ui/UnconnectedUASInfoWidget.h \
+    src/ui/QGCRGBDView.h \
+    src/ui/mavlink/QGCMAVLinkMessageSender.h \
+    src/ui/firmwareupdate/QGCFirmwareUpdateWidget.h \
+    src/ui/QGCPluginHost.h \
+    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.h \
+    src/ui/map3D/gpl.h
 
 # Google Earth is only supported on Mac OS and Windows with Visual Studio Compiler
-macx|win32-msvc2008|win32-msvc2010::HEADERS += src/ui/map3D/QGCGoogleEarthView.h
+macx|macx-g++|macx-g++42|win32-msvc2008|win32-msvc2010::HEADERS += src/ui/map3D/QGCGoogleEarthView.h
 contains(DEPENDENCIES_PRESENT, osg) { 
     message("Including headers for OpenSceneGraph")
     
@@ -333,7 +373,6 @@ contains(DEPENDENCIES_PRESENT, osg) {
     HEADERS += src/ui/map3D/Q3DWidget.h \
         src/ui/map3D/GCManipulator.h \
         src/ui/map3D/ImageWindowGeode.h \
-        src/ui/map3D/QOSGWidget.h \
         src/ui/map3D/PixhawkCheetahGeode.h \
         src/ui/map3D/Pixhawk3DWidget.h \
         src/ui/map3D/Q3DWidgetFactory.h \
@@ -344,12 +383,13 @@ contains(DEPENDENCIES_PRESENT, osg) {
         src/ui/map3D/Imagery.h \
         src/ui/map3D/HUDScaleGeode.h \
         src/ui/map3D/WaypointGroupNode.h
-    contains(DEPENDENCIES_PRESENT, osgearth) { 
-        message("Including headers for OSGEARTH")
-        
-        # Enable only if OpenSceneGraph is available
-        HEADERS += src/ui/map3D/QMap3D.h
-    }
+}
+contains(DEPENDENCIES_PRESENT, protobuf):contains(MAVLINK_CONF, pixhawk) {
+    message("Including headers for Protocol Buffers")
+
+    # Enable only if protobuf is available
+    HEADERS += thirdParty/mavlink/include/pixhawk/pixhawk.pb.h \
+               src/ui/map3D/ObstacleGroupNode.h
 }
 contains(DEPENDENCIES_PRESENT, libfreenect) { 
     message("Including headers for libfreenect")
@@ -362,10 +402,9 @@ SOURCES += src/main.cc \
     src/uas/UASManager.cc \
     src/uas/UAS.cc \
     src/comm/LinkManager.cc \
+    src/comm/LinkInterface.cpp \
     src/comm/SerialLink.cc \
-    src/comm/SerialSimulationLink.cc \
     src/comm/MAVLinkProtocol.cc \
-    src/comm/AS4Protocol.cc \
     src/comm/QGCFlightGearLink.cc \
     src/ui/CommConfigurationWindow.cc \
     src/ui/SerialConfigurationWindow.cc \
@@ -385,7 +424,6 @@ SOURCES += src/main.cc \
     src/ui/ParameterInterface.cc \
     src/ui/WaypointList.cc \
     src/Waypoint.cc \
-    src/ui/WaypointView.cc \
     src/ui/ObjectDetectionView.cc \
     src/input/JoystickInput.cc \
     src/ui/JoystickWidget.cc \
@@ -401,6 +439,7 @@ SOURCES += src/main.cc \
     src/uas/SlugsMAV.cc \
     src/uas/PxQuadMAV.cc \
     src/uas/ArduPilotMegaMAV.cc \
+    src/uas/senseSoarMAV.cpp \
     src/ui/watchdog/WatchdogControl.cc \
     src/ui/watchdog/WatchdogProcessView.cc \
     src/ui/watchdog/WatchdogView.cc \
@@ -428,7 +467,6 @@ SOURCES += src/main.cc \
     src/ui/uas/QGCUnconnectedInfoWidget.cc \
     src/ui/designer/QGCToolWidget.cc \
     src/ui/designer/QGCParamSlider.cc \
-    src/ui/designer/QGCActionButton.cc \
     src/ui/designer/QGCCommandButton.cc \
     src/ui/designer/QGCToolWidgetItem.cc \
     src/ui/QGCMAVLinkLogPlayer.cc \
@@ -448,10 +486,20 @@ SOURCES += src/main.cc \
     src/ui/map/QGCMapTool.cc \
     src/ui/map/QGCMapToolBar.cc \
     src/ui/QGCToolBar.cc \
-    src/ui/linechart/QGCLineChartCurveLabel.cc
+    src/ui/QGCMAVLinkInspector.cc \
+    src/ui/MAVLinkDecoder.cc \
+    src/ui/WaypointViewOnlyView.cc \
+    src/ui/WaypointEditableView.cc \
+    src/ui/UnconnectedUASInfoWidget.cc \
+    src/ui/QGCRGBDView.cc \
+    src/ui/mavlink/QGCMAVLinkMessageSender.cc \
+    src/ui/firmwareupdate/QGCFirmwareUpdateWidget.cc \
+    src/ui/QGCPluginHost.cc \
+    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.cc \
+    src/ui/map3D/gpl.cc
 
 # Enable Google Earth only on Mac OS and Windows with Visual Studio compiler
-macx|win32-msvc2008|win32-msvc2010::SOURCES += src/ui/map3D/QGCGoogleEarthView.cc
+macx|macx-g++|macx-g++42|win32-msvc2008|win32-msvc2010::SOURCES += src/ui/map3D/QGCGoogleEarthView.cc
 
 # Enable OSG only if it has been found
 contains(DEPENDENCIES_PRESENT, osg) { 
@@ -461,7 +509,6 @@ contains(DEPENDENCIES_PRESENT, osg) {
     SOURCES += src/ui/map3D/Q3DWidget.cc \
         src/ui/map3D/ImageWindowGeode.cc \
         src/ui/map3D/GCManipulator.cc \
-        src/ui/map3D/QOSGWidget.cc \
         src/ui/map3D/PixhawkCheetahGeode.cc \
         src/ui/map3D/Pixhawk3DWidget.cc \
         src/ui/map3D/Q3DWidgetFactory.cc \
@@ -478,6 +525,13 @@ contains(DEPENDENCIES_PRESENT, osg) {
         # Enable only if OpenSceneGraph is available
         SOURCES += src/ui/map3D/QMap3D.cc
     }
+}
+contains(DEPENDENCIES_PRESENT, protobuf):contains(MAVLINK_CONF, pixhawk) {
+    message("Including sources for Protocol Buffers")
+
+    # Enable only if protobuf is available
+    SOURCES += thirdParty/mavlink/src/pixhawk/pixhawk.pb.cc \
+               src/ui/map3D/ObstacleGroupNode.cc
 }
 contains(DEPENDENCIES_PRESENT, libfreenect) { 
     message("Including sources for libfreenect")
@@ -512,3 +566,22 @@ win32:exists(src/lib/opalrt/OpalApi.h):exists(C:/OPAL-RT/RT-LAB7.2.4/Common/bin)
 }
 TRANSLATIONS += es-MX.ts \
     en-US.ts
+
+# xbee support
+# libxbee only supported by linux and windows systems
+win32-msvc2008|win32-msvc2010|linux{
+    HEADERS += src/comm/XbeeLinkInterface.h \
+	src/comm/XbeeLink.h \
+	src/comm/HexSpinBox.h \
+	src/ui/XbeeConfigurationWindow.h \
+	src/comm/CallConv.h
+    SOURCES += src/comm/XbeeLink.cpp \
+	src/comm/HexSpinBox.cpp \
+	src/ui/XbeeConfigurationWindow.cpp
+    DEFINES += XBEELINK
+    INCLUDEPATH += thirdParty/libxbee
+# TO DO: build library when it does not exists already
+    LIBS += -LthirdParty/libxbee/lib \
+	-llibxbee
+
+}

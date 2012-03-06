@@ -47,7 +47,7 @@ inline bool isnan(T value)
 template<typename T>
 inline bool isinf(T value)
 {
-    return std::numeric_limits<T>::has_infinity && (value == std::numeric_limits<T>::infinity() || (-1*value) == std::numeric_limits<T>::infinity());
+    return (value == std::numeric_limits<T>::infinity() || (-1*value) == std::numeric_limits<T>::infinity()) && std::numeric_limits<T>::has_infinity;
 }
 #else
 #include <cmath>
@@ -77,6 +77,8 @@ const QColor colorBlack(0, 0, 0);
 quint64 groundTimeUsecs();
 /** @brief Get the current ground time in milliseconds */
 quint64 groundTimeMilliseconds();
+/** @brief Get the current ground time in seconds */
+qreal groundTimeSeconds();
 /** @brief Returns the angle limited to -pi - pi */
 float limitAngleToPMPIf(float angle);
 /** @brief Returns the angle limited to -pi - pi */

@@ -14,7 +14,7 @@ public:
         MAV_ICON_AIRPLANE,
         MAV_ICON_QUADROTOR,
         MAV_ICON_COAXIAL,
-        MAV_ICON_HELICOPTER,
+        MAV_ICON_HELICOPTER
     } MAV_ICON_TYPE;
 
     //!

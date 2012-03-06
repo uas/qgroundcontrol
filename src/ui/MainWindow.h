@@ -35,6 +35,7 @@ This file is part of the QGROUNDCONTROL project
 #include <QStatusBar>
 #include <QStackedWidget>
 #include <QSettings>
+#include <qlist.h>
 
 #include "ui_MainWindow.h"
 #include "LinkManager.h"
@@ -54,7 +55,6 @@ This file is part of the QGROUNDCONTROL project
 #include "JoystickWidget.h"
 #include "input/JoystickInput.h"
 #include "DebugConsole.h"
-//#include "MapWidget.h"
 #include "ParameterInterface.h"
 #include "XMLCommProtocolWidget.h"
 #include "HDDisplay.h"
@@ -74,10 +74,14 @@ This file is part of the QGROUNDCONTROL project
 
 #include "SlugsPadCameraControl.h"
 #include "UASControlParameters.h"
-#include "QGCFlightGearLink.h"
+#include "QGCMAVLinkInspector.h"
 #include "QGCMAVLinkLogPlayer.h"
+#include "MAVLinkDecoder.h"
 
 class QGCMapTool;
+class QGCMAVLinkMessageSender;
+class QGCFirmwareUpdate;
+class QSplashScreen;
 
 /**
  * @brief Main Application Window
@@ -88,7 +92,7 @@ class MainWindow : public QMainWindow
     Q_OBJECT
 
 public:
-    static MainWindow* instance();
+    static MainWindow* instance(QSplashScreen* screen = 0);
     ~MainWindow();
 
     enum QGC_MAINWINDOW_STYLE {
@@ -111,9 +115,9 @@ public:
         return lowPowerMode;
     }
 
+    QList<QAction*> listLinkMenuActions(void);
+
 public slots:
-//    /** @brief Store the mainwindow settings */
-//    void storeSettings();
 
     /** @brief Shows a status message on the bottom status bar */
     void showStatusMessage(const QString& status, int timeout);
@@ -151,6 +155,8 @@ public slots:
     void loadOperatorView();
     /** @brief Load MAVLink XML generator view */
     void loadMAVLinkView();
+    /** @brief Load firmware update view */
+    void loadFirmwareUpdateView();
 
     /** @brief Show the online help for users */
     void showHelp();
@@ -211,6 +217,12 @@ public slots:
      */
     void showCentralWidget();
 
+    /** @brief Update the window name */
+    void configureWindowName();
+
+signals:
+    void initStatusChanged(const QString& message);
+
 public:
     QGCMAVLinkLogPlayer* getLogPlayer()
     {
@@ -226,22 +238,16 @@ protected:
 
     MainWindow(QWidget *parent = 0);
 
-    /** @brief Set default window settings for the current autopilot type */
-    void setDefaultSettingsForAp();
-
-    typedef enum _VIEW_SECTIONS {
+    typedef enum _VIEW_SECTIONS
+    {
         VIEW_ENGINEER,
         VIEW_OPERATOR,
         VIEW_PILOT,
         VIEW_MAVLINK,
+        VIEW_FIRMWAREUPDATE,
         VIEW_UNCONNECTED,    ///< View in unconnected mode, when no UAS is available
         VIEW_FULL            ///< All widgets shown at once
     } VIEW_SECTIONS;
-
-
-    QHash<int, QAction*> toolsMenuActions; // Holds ptr to the Menu Actions
-    QHash<int, QWidget*> dockWidgets;  // Holds ptr to the Actual Dock widget
-//    QHash<int, Qt::DockWidgetArea> dockWidgetLocations; // Holds the location
 
     /**
      * @brief Adds an already instantiated QDockedWidget to the Tools Menu
@@ -255,17 +261,6 @@ protected:
      * @param location  The default location for the QDockedWidget in case there is no previous key in the settings
      */
     void addTool(QDockWidget* widget, const QString& title, Qt::DockWidgetArea location=Qt::RightDockWidgetArea);
-
-//    /**
-//     * @brief Determines if a QDockWidget needs to be show and if so, shows it
-//     *
-//     *  Based on the the autopilot and the current view it queries the settings and shows the
-//     *  widget if necessary
-//     *
-//     * @param widget    The QDockWidget requested to be shown
-//     * @param view      The view for which the QDockWidget is requested
-//     */
-//    void showTheWidget (TOOLS_WIDGET_NAMES widget, VIEW_SECTIONS view = VIEW_MAVLINK);
 
     /**
      * @brief Adds an already instantiated QWidget to the center stack
@@ -285,6 +280,7 @@ protected:
 
     /** @brief Keeps track of the current view */
     VIEW_SECTIONS currentView;
+    QGC_MAINWINDOW_STYLE currentStyle;
     bool aboutToCloseFlag;
     bool changingViewsFlag;
 
@@ -295,8 +291,8 @@ protected:
     void buildCommonWidgets();
     void connectCommonWidgets();
     void connectCommonActions();
+	void connectSenseSoarActions();
 
-    void configureWindowName();
     void loadSettings();
     void storeSettings();
 
@@ -308,7 +304,7 @@ protected:
 
     QSettings settings;
     QStackedWidget *centerStack;
-    QActionGroup centerStackActionGroup;
+    QActionGroup* centerStackActionGroup;
 
     // Center widgets
     QPointer<Linecharts> linechartWidget;
@@ -319,12 +315,10 @@ protected:
 #ifdef QGC_OSG_ENABLED
     QPointer<QWidget> _3DWidget;
 #endif
-#ifdef QGC_OSGEARTH_ENABLED
-    QPointer<QWidget> _3DMapWidget;
-#endif
 #if (defined _MSC_VER) || (defined Q_OS_MAC)
     QPointer<QGCGoogleEarthView> gEarthWidget;
 #endif
+    QPointer<QGCFirmwareUpdate> firmwareUpdateWidget;
 
     // Dock widgets
     QPointer<QDockWidget> controlDockWidget;
@@ -343,6 +337,8 @@ protected:
     QPointer<QDockWidget> headUpDockWidget;
     QPointer<QDockWidget> video1DockWidget;
     QPointer<QDockWidget> video2DockWidget;
+    QPointer<QDockWidget> rgbd1DockWidget;
+    QPointer<QDockWidget> rgbd2DockWidget;
     QPointer<QDockWidget> logPlayerDockWidget;
 
     QPointer<QDockWidget> hsiDockWidget;
@@ -354,6 +350,9 @@ protected:
 
     QPointer<QGCToolBar> toolBar;
 
+    QPointer<QDockWidget> mavlinkInspectorWidget;
+    QPointer<MAVLinkDecoder> mavlinkDecoder;
+    QPointer<QDockWidget> mavlinkSenderWidget;
     QGCMAVLinkLogPlayer* logPlayer;
 
     // Popup widgets
@@ -376,15 +375,14 @@ protected:
     QTimer* videoTimer;
     QString styleFileName;
     bool autoReconnect;
-    QGC_MAINWINDOW_STYLE currentStyle;
     Qt::WindowStates windowStateVal;
     bool lowPowerMode; ///< If enabled, QGC reduces the update rates of all widgets
     QGCFlightGearLink* fgLink;
+    QTimer windowNameUpdateTimer;
 
 private:
     Ui::MainWindow ui;
 
-//    QString buildMenuKey (SETTINGS_SECTIONS section , TOOLS_WIDGET_NAMES tool, VIEW_SECTIONS view);
     QString getWindowStateKey();
     QString getWindowGeometryKey();
 

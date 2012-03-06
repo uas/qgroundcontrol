@@ -99,12 +99,13 @@ HSIDisplay::HSIDisplay(QWidget *parent) :
     laserFix(0),
     mavInitialized(false),
     bottomMargin(10.0f),
-    topMargin(12.0f),
-    userSetPointSet(false),
     dragStarted(false),
+    topMargin(12.0f),
     leftDragStarted(false),
     mouseHasMoved(false),
-    actionPending(false)
+    actionPending(false),
+    userSetPointSet(false),
+    userXYSetPointSet(false)
 {
     refreshTimer->setInterval(updateInterval);
 
@@ -133,6 +134,11 @@ HSIDisplay::HSIDisplay(QWidget *parent) :
     statusClearTimer.start(3000);
 
     setFocusPolicy(Qt::StrongFocus);
+}
+
+HSIDisplay::~HSIDisplay()
+{
+
 }
 
 void HSIDisplay::resetMAVState()
@@ -179,6 +185,7 @@ void HSIDisplay::paintEvent(QPaintEvent * event)
 
 void HSIDisplay::renderOverlay()
 {
+    if (!isVisible()) return;
 #if (QGC_EVENTLOOP_DEBUG)
     qDebug() << "EVENTLOOP:" << __FILE__ << __LINE__;
 #endif
@@ -479,6 +486,11 @@ void HSIDisplay::updatePositionZControllerEnabled(bool enabled)
 
 void HSIDisplay::updateObjectPosition(unsigned int time, int id, int type, const QString& name, int quality, float bearing, float distance)
 {
+	Q_UNUSED(quality);
+	Q_UNUSED(name);
+	Q_UNUSED(type);
+	Q_UNUSED(id);
+	Q_UNUSED(time);
     // FIXME add multi-object support
     QPainter painter(this);
     QColor color(Qt::yellow);
@@ -625,10 +637,39 @@ void HSIDisplay::keyPressEvent(QKeyEvent* event)
         statusClearTimer.start();
         sendBodySetPointCoordinates();
     }
-    else
+    else if ((event->key() ==  Qt::Key_Up))
     {
-        HDDisplay::keyPressEvent(event);
+        setBodySetpointCoordinateXY(0.5, 0);
     }
+    else if ((event->key() ==  Qt::Key_Down))
+    {
+        setBodySetpointCoordinateXY(-0.5, 0);
+    }
+    else if ((event->key() ==  Qt::Key_Left))
+    {
+        setBodySetpointCoordinateXY(0, -0.5);
+    }
+    else if ((event->key() ==  Qt::Key_Right))
+    {
+        setBodySetpointCoordinateXY(0, 0.5);
+    }
+    else if ((event->key() ==  Qt::Key_Plus))
+    {
+        setBodySetpointCoordinateZ(-0.2);
+    }
+    else if ((event->key() ==  Qt::Key_Minus))
+    {
+        setBodySetpointCoordinateZ(+0.2);
+    }
+    else if ((event->key() ==  Qt::Key_L))
+    {
+        setBodySetpointCoordinateYaw(-0.1);
+    }
+    else if ((event->key() ==  Qt::Key_R))
+    {
+        setBodySetpointCoordinateYaw(0.1);
+    }
+     HDDisplay::keyPressEvent(event);
 }
 
 void HSIDisplay::contextMenuEvent (QContextMenuEvent* event)
@@ -656,6 +697,7 @@ void HSIDisplay::setActiveUAS(UASInterface* uas)
         disconnect(this->uas, SIGNAL(globalPositionChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateGlobalPosition(UASInterface*,double,double,double,quint64)));
         disconnect(this->uas, SIGNAL(attitudeThrustSetPointChanged(UASInterface*,double,double,double,double,quint64)), this, SLOT(updateAttitudeSetpoints(UASInterface*,double,double,double,double,quint64)));
         disconnect(this->uas, SIGNAL(positionSetPointsChanged(int,float,float,float,float,quint64)), this, SLOT(updatePositionSetpoints(int,float,float,float,float,quint64)));
+        disconnect(uas, SIGNAL(userPositionSetPointsChanged(int,float,float,float,float)), this, SLOT(updateUserPositionSetpoints(int,float,float,float,float)));
         disconnect(this->uas, SIGNAL(speedChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateSpeed(UASInterface*,double,double,double,quint64)));
         disconnect(this->uas, SIGNAL(attitudeChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateAttitude(UASInterface*,double,double,double,quint64)));
 
@@ -676,6 +718,7 @@ void HSIDisplay::setActiveUAS(UASInterface* uas)
     connect(uas, SIGNAL(globalPositionChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateGlobalPosition(UASInterface*,double,double,double,quint64)));
     connect(uas, SIGNAL(attitudeThrustSetPointChanged(UASInterface*,double,double,double,double,quint64)), this, SLOT(updateAttitudeSetpoints(UASInterface*,double,double,double,double,quint64)));
     connect(uas, SIGNAL(positionSetPointsChanged(int,float,float,float,float,quint64)), this, SLOT(updatePositionSetpoints(int,float,float,float,float,quint64)));
+    connect(uas, SIGNAL(userPositionSetPointsChanged(int,float,float,float,float)), this, SLOT(updateUserPositionSetpoints(int,float,float,float,float)));
     connect(uas, SIGNAL(speedChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateSpeed(UASInterface*,double,double,double,quint64)));
     connect(uas, SIGNAL(attitudeChanged(UASInterface*,double,double,double,quint64)), this, SLOT(updateAttitude(UASInterface*,double,double,double,quint64)));
 
@@ -797,6 +840,16 @@ void HSIDisplay::updateAttitude(UASInterface* uas, double roll, double pitch, do
     this->roll = roll;
     this->pitch = pitch;
     this->yaw = yaw;
+}
+
+void HSIDisplay::updateUserPositionSetpoints(int uasid, float xDesired, float yDesired, float zDesired, float yawDesired)
+{
+    uiXSetCoordinate = xDesired;
+    uiYSetCoordinate = yDesired;
+    uiZSetCoordinate = zDesired;
+    uiYawSet = yawDesired;
+    userXYSetPointSet = true;
+    userSetPointSet = true;
 }
 
 void HSIDisplay::updatePositionSetpoints(int uasid, float xDesired, float yDesired, float zDesired, float yawDesired, quint64 usec)
@@ -953,7 +1006,7 @@ void HSIDisplay::drawWaypoints(QPainter& painter)
 {
     if (uas)
     {
-        const QVector<Waypoint*>& list = uas->getWaypointManager()->getWaypointList();
+        const QVector<Waypoint*>& list = uas->getWaypointManager()->getWaypointEditableList();
 
         QColor color;
         painter.setBrush(Qt::NoBrush);
@@ -962,7 +1015,8 @@ void HSIDisplay::drawWaypoints(QPainter& painter)
 
         for (int i = 0; i < list.size(); i++) {
             QPointF in;
-            if (list.at(i)->getFrame() == MAV_FRAME_LOCAL) {
+            if (list.at(i)->getFrame() == MAV_FRAME_LOCAL_NED)
+            {
                 // Do not transform
                 in = QPointF(list.at(i)->getX(), list.at(i)->getY());
             } else {

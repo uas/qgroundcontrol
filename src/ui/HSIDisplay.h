@@ -48,7 +48,7 @@ class HSIDisplay : public HDDisplay
     Q_OBJECT
 public:
     HSIDisplay(QWidget *parent = 0);
-    // ~HSIDisplay();
+    ~HSIDisplay();
 
 public slots:
     void setActiveUAS(UASInterface* uas);
@@ -57,6 +57,7 @@ public slots:
     void updateSatellite(int uasid, int satid, float azimuth, float direction, float snr, bool used);
     void updateAttitudeSetpoints(UASInterface*, double rollDesired, double pitchDesired, double yawDesired, double thrustDesired, quint64 usec);
     void updateAttitude(UASInterface* uas, double roll, double pitch, double yaw, quint64 time);
+    void updateUserPositionSetpoints(int uasid, float xDesired, float yDesired, float zDesired, float yawDesired);
     void updatePositionSetpoints(int uasid, float xDesired, float yDesired, float zDesired, float yawDesired, quint64 usec);
     void updateLocalPosition(UASInterface*, double x, double y, double z, quint64 usec);
     void updateGlobalPosition(UASInterface*, double lat, double lon, double alt, quint64 usec);
@@ -79,6 +80,7 @@ public slots:
     /** @brief Ultrasound/Infrared localization changed */
     void updateInfraredUltrasoundLocalization(UASInterface* uas, int fix);
 
+    /** @brief Repaint the widget */
     void paintEvent(QPaintEvent * event);
     /** @brief Update state from joystick */
     void updateJoystick(double roll, double pitch, double yaw, double thrust, int xHat, int yHat);
@@ -91,6 +93,7 @@ public slots:
         statusMessage = "";
         if (actionPending) statusMessage = "TIMED OUT, NO ACTION";
         statusClearTimer.start();
+        userSetPointSet = false;
         actionPending = false;
     }
 

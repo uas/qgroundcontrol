@@ -32,14 +32,20 @@ QGCToolBar::QGCToolBar(QWidget *parent) :
     toggleLoggingAction(NULL),
     logReplayAction(NULL),
     mav(NULL),
-    player(NULL)
+    player(NULL),
+    changed(true),
+    batteryPercent(0),
+    batteryVoltage(0),
+    wpId(0),
+    wpDistance(0),
+    systemArmed(false)
 {
     setObjectName("QGC_TOOLBAR");
 
     toggleLoggingAction = new QAction(QIcon(":"), "Logging", this);
     toggleLoggingAction->setCheckable(true);
     logReplayAction = new QAction(QIcon(":"), "Replay", this);
-    logReplayAction->setCheckable(true);
+    logReplayAction->setCheckable(false);
 
     addAction(toggleLoggingAction);
     addAction(logReplayAction);
@@ -50,6 +56,8 @@ QGCToolBar::QGCToolBar(QWidget *parent) :
     // Add MAV widget
     symbolButton = new QToolButton(this);
     toolBarNameLabel = new QLabel("------", this);
+    toolBarSafetyLabel = new QLabel("SAFE", this);
+    toolBarSafetyLabel->setStyleSheet("QLabel { margin: 0px 2px; font: 14px; color: #14C814; }");
     toolBarModeLabel = new QLabel("------", this);
     toolBarModeLabel->setStyleSheet("QLabel { margin: 0px 2px; font: 14px; color: #3C7B9E; }");
     toolBarStateLabel = new QLabel("------", this);
@@ -65,11 +73,13 @@ QGCToolBar::QGCToolBar(QWidget *parent) :
     toolBarBatteryBar->setMaximum(100);
     toolBarBatteryBar->setMinimumWidth(20);
     toolBarBatteryBar->setMaximumWidth(100);
+    toolBarBatteryBar->setToolTip(tr("Battery charge level"));
     toolBarBatteryVoltageLabel = new QLabel("xx.x V");
     toolBarBatteryVoltageLabel->setStyleSheet(QString("QLabel { margin: 0px 0px 0px 4px; font: 14px; color: %1; }").arg(QColor(Qt::green).name()));
     symbolButton->setStyleSheet("QWidget { background-color: #050508; color: #DDDDDF; background-clip: border; } QToolButton { font-weight: bold; font-size: 12px; border: 0px solid #999999; border-radius: 5px; min-width:22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; margin: 0px 0px 0px 20px; background-color: none; }");
     addWidget(symbolButton);
     addWidget(toolBarNameLabel);
+    addWidget(toolBarSafetyLabel);
     addWidget(toolBarModeLabel);
     addWidget(toolBarStateLabel);
     addWidget(toolBarBatteryBar);
@@ -83,13 +93,16 @@ QGCToolBar::QGCToolBar(QWidget *parent) :
 
     setActiveUAS(UASManager::instance()->getActiveUAS());
     connect(UASManager::instance(), SIGNAL(activeUASSet(UASInterface*)), this, SLOT(setActiveUAS(UASInterface*)));
+
+    connect(&updateViewTimer, SIGNAL(timeout()), this, SLOT(updateView()));
+    updateViewTimer.start(2000);
 }
 
 void QGCToolBar::setLogPlayer(QGCMAVLinkLogPlayer* player)
 {
     this->player = player;
-    connect(toggleLoggingAction, SIGNAL(triggered(bool)), this, SLOT(playLogFile(bool)));
-    connect(logReplayAction, SIGNAL(triggered(bool)), this, SLOT(logging(bool)));
+    connect(toggleLoggingAction, SIGNAL(triggered(bool)), this, SLOT(logging(bool)));
+    connect(logReplayAction, SIGNAL(triggered(bool)), this, SLOT(playLogFile(bool)));
 }
 
 void QGCToolBar::playLogFile(bool enabled)
@@ -130,7 +143,7 @@ void QGCToolBar::logging(bool enabled)
         }
 
         QFileInfo file(fileName);
-        if (file.exists() && !file.isWritable())
+        if ((file.exists() && !file.isWritable()))
         {
             QMessageBox msgBox;
             msgBox.setIcon(QMessageBox::Critical);
@@ -151,6 +164,39 @@ void QGCToolBar::logging(bool enabled)
 void QGCToolBar::addPerspectiveChangeAction(QAction* action)
 {
     insertAction(toggleLoggingAction, action);
+
+    // Set tab style
+    QWidget* widget = widgetForAction(action);
+    widget->setStyleSheet("\
+                          * { font-weight: bold; min-height: 16px; min-width: 24px; \
+                          border-top: 1px solid #BBBBBB; \
+                          border-bottom: 0px; \
+                          border-left: 1px solid #BBBBBB; \
+                          border-right: 1px solid #BBBBBB; \
+                          border-top-left-radius: 5px; \
+                          border-top-right-radius: 5px; \
+                          border-bottom-left-radius: 0px; \
+                          border-bottom-right-radius: 0px; \
+                          max-height: 22px; \
+                          margin-top: 4px; \
+                          margin-left: 2px; \
+                          margin-bottom: 0px; \
+                          margin-right: 2px; \
+                          background-color: #222222; \
+                  } \
+                  *:checked { \
+                          background-color: #000000; \
+                          border-top: 2px solid #379AC3; \
+                          border-bottom: 0px; \
+                          border-left: 2px solid #379AC3; \
+                          border-right: 2px solid #379AC3; \
+                  } \
+                  *:pressed { \
+                          background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #bbbbbb, stop: 1 #b0b0b0); \
+                          border-top: 2px solid #379AC3; \
+                          border-bottom: 0px; \
+                          border-left: 2px solid #379AC3; \
+                          border-right: 2px solid #379AC3; }");
 }
 
 void QGCToolBar::setActiveUAS(UASInterface* active)
@@ -167,9 +213,10 @@ void QGCToolBar::setActiveUAS(UASInterface* active)
         disconnect(mav, SIGNAL(systemTypeSet(UASInterface*,uint)), this, SLOT(setSystemType(UASInterface*,uint)));
         disconnect(mav, SIGNAL(textMessageReceived(int,int,int,QString)), this, SLOT(receiveTextMessage(int,int,int,QString)));
         disconnect(mav, SIGNAL(batteryChanged(UASInterface*,double,double,int)), this, SLOT(updateBatteryRemaining(UASInterface*,double,double,int)));
+        disconnect(mav, SIGNAL(armingChanged(bool)), this, SLOT(updateArmingState(bool)));
         if (mav->getWaypointManager())
         {
-            disconnect(mav->getWaypointManager(), SIGNAL(currentWaypointChanged(int)), this, SLOT(updateCurrentWaypoint(int)));
+            disconnect(mav->getWaypointManager(), SIGNAL(currentWaypointChanged(quint16)), this, SLOT(updateCurrentWaypoint(quint16)));
             disconnect(mav->getWaypointManager(), SIGNAL(waypointDistanceChanged(double)), this, SLOT(updateWaypointDistance(double)));
         }
     }
@@ -182,6 +229,7 @@ void QGCToolBar::setActiveUAS(UASInterface* active)
     connect(active, SIGNAL(systemTypeSet(UASInterface*,uint)), this, SLOT(setSystemType(UASInterface*,uint)));
     connect(active, SIGNAL(textMessageReceived(int,int,int,QString)), this, SLOT(receiveTextMessage(int,int,int,QString)));
     connect(active, SIGNAL(batteryChanged(UASInterface*,double,double,int)), this, SLOT(updateBatteryRemaining(UASInterface*,double,double,int)));
+    connect(active, SIGNAL(armingChanged(bool)), this, SLOT(updateArmingState(bool)));
     if (active->getWaypointManager())
     {
         connect(active->getWaypointManager(), SIGNAL(currentWaypointChanged(quint16)), this, SLOT(updateCurrentWaypoint(quint16)));
@@ -189,6 +237,8 @@ void QGCToolBar::setActiveUAS(UASInterface* active)
     }
 
     // Update all values once
+    systemName = mav->getUASName();
+    systemArmed = mav->isArmed();
     toolBarNameLabel->setText(mav->getUASName());
     toolBarNameLabel->setStyleSheet(QString("QLabel { font: bold 16px; color: %1; }").arg(mav->getColor().name()));
     symbolButton->setStyleSheet(QString("QWidget { background-color: %1; color: #DDDDDF; background-clip: border; } QToolButton { font-weight: bold; font-size: 12px; border: 0px solid #999999; border-radius: 5px; min-width:22px; max-width: 22px; min-height: 22px; max-height: 22px; padding: 0px; margin: 0px 4px 0px 20px; background-color: none; }").arg(mav->getColor().name()));
@@ -202,41 +252,79 @@ void QGCToolBar::createCustomWidgets()
 
 }
 
+void QGCToolBar::updateArmingState(bool armed)
+{
+    systemArmed = armed;
+    changed = true;
+}
+
+void QGCToolBar::updateView()
+{
+    if (!changed) return;
+    toolBarDistLabel->setText(tr("%1 m").arg(wpDistance, 6, 'f', 2, '0'));
+    toolBarWpLabel->setText(tr("WP%1").arg(wpId));
+    toolBarBatteryBar->setValue(batteryPercent);
+    toolBarBatteryVoltageLabel->setText(tr("%1 V").arg(batteryVoltage, 4, 'f', 1, ' '));
+    toolBarStateLabel->setText(tr("%1").arg(state));
+    toolBarModeLabel->setText(tr("%1").arg(mode));
+    toolBarNameLabel->setText(systemName);
+    toolBarMessageLabel->setText(lastSystemMessage);
+
+    if (systemArmed)
+    {
+        toolBarSafetyLabel->setStyleSheet(QString("QLabel { margin: 0px 2px; font: 14px; color: %1; background-color: %2; }").arg(QGC::colorRed.name()).arg(QGC::colorYellow.name()));
+        toolBarSafetyLabel->setText(tr("ARMED"));
+    }
+    else
+    {
+        toolBarSafetyLabel->setStyleSheet("QLabel { margin: 0px 2px; font: 14px; color: #14C814; }");
+        toolBarSafetyLabel->setText(tr("SAFE"));
+    }
+
+    changed = false;
+}
+
 void QGCToolBar::updateWaypointDistance(double distance)
 {
-    toolBarDistLabel->setText(tr("%1 m").arg(distance, 6, 'f', 2, '0'));
+    if (wpDistance != distance) changed = true;
+    wpDistance = distance;
 }
 
 void QGCToolBar::updateCurrentWaypoint(quint16 id)
 {
-    toolBarWpLabel->setText(tr("WP%1").arg(id));
+    if (wpId != id) changed = true;
+    wpId = id;
 }
 
 void QGCToolBar::updateBatteryRemaining(UASInterface* uas, double voltage, double percent, int seconds)
 {
     Q_UNUSED(uas);
     Q_UNUSED(seconds);
-    toolBarBatteryBar->setValue(percent);
-    toolBarBatteryVoltageLabel->setText(tr("%1 V").arg(voltage, 4, 'f', 1, ' '));
+    if (batteryPercent != percent || batteryVoltage != voltage) changed = true;
+    batteryPercent = percent;
+    batteryVoltage = voltage;
 }
 
 void QGCToolBar::updateState(UASInterface* system, QString name, QString description)
 {
     Q_UNUSED(system);
     Q_UNUSED(description);
-    toolBarStateLabel->setText(tr("%1").arg(name));
+    if (state != name) changed = true;
+    state = name;
 }
 
 void QGCToolBar::updateMode(int system, QString name, QString description)
 {
     Q_UNUSED(system);
     Q_UNUSED(description);
-    toolBarModeLabel->setText(tr("%1").arg(name));
+    if (mode != name) changed = true;
+    mode = name;
 }
 
 void QGCToolBar::updateName(const QString& name)
 {
-    toolBarNameLabel->setText(name);
+    if (systemName != name) changed = true;
+    systemName = name;
 }
 
 /**
@@ -280,11 +368,12 @@ void QGCToolBar::receiveTextMessage(int uasid, int componentid, int severity, QS
     Q_UNUSED(uasid);
     Q_UNUSED(componentid);
     Q_UNUSED(severity);
-    toolBarMessageLabel->setText(text);
+    if (lastSystemMessage != text) changed = true;
+    lastSystemMessage = text;
 }
 
 QGCToolBar::~QGCToolBar()
 {
-    delete toggleLoggingAction;
-    delete logReplayAction;
+    if (toggleLoggingAction) toggleLoggingAction->deleteLater();
+    if (logReplayAction) logReplayAction->deleteLater();
 }

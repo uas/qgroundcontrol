@@ -83,6 +83,12 @@ public slots:
     void appendData(int uasId, const QString& curve, const QString& unit, double value, quint64 usec);
     /** @brief Append data as int with unit */
     void appendData(int uasId, const QString& curve, const QString& unit, int value, quint64 usec);
+    /** @brief Append data as unsigned int with unit */
+    void appendData(int uasId, const QString& curve, const QString& unit, unsigned int value, quint64 usec);
+    /** @brief Append data as int64 with unit */
+    void appendData(int uasId, const QString& curve, const QString& unit, qint64 value, quint64 usec);
+    /** @brief Append data as uint64 with unit */
+    void appendData(int uasId, const QString& curve, const QString& unit, quint64 value, quint64 usec);
     void takeButtonClick(bool checked);
     void setPlotWindowPosition(int scrollBarValue);
     void setPlotWindowPosition(quint64 position);
@@ -92,6 +98,11 @@ public slots:
     /** @brief Stop automatic updates once hidden */
     void hideEvent(QHideEvent* event);
     void setActive(bool active);
+    void setActiveSystem(int systemid)
+    {
+        selectedMAV = systemid;
+    }
+
     /** @brief Set the number of values to average over */
     void setAverageWindow(int windowSize);
     /** @brief Start logging to file */
@@ -113,6 +124,8 @@ protected:
     QToolButton* createButton(QWidget* parent);
     void createCurveItem(QString curve);
     void createLayout();
+    /** @brief Get the name for a curve key */
+    QString getCurveName(const QString& key, bool shortEnabled);
 
     int sysid;                            ///< ID of the unmanned system this plot belongs to
     LinechartPlot* activePlot;            ///< Plot for this system
@@ -156,6 +169,7 @@ protected:
     QTimer* updateTimer;
     LogCompressor* compressor;
     QCheckBox* selectAllCheckBox;
+    int selectedMAV; ///< The MAV for which plot items are accepted, -1 for all systems
     static const int updateInterval = 1000; ///< Time between number updates, in milliseconds
 
     static const int MAX_CURVE_MENUITEM_NUMBER = 8;

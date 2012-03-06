@@ -42,6 +42,15 @@ This file is part of the QGROUNDCONTROL project
 #include "QGCMAVLink.h"
 #include "QGC.h"
 
+#if defined(QGC_PROTOBUF_ENABLED)
+#include <tr1/memory>
+#include <google/protobuf/message.h>
+#if defined(QGC_USE_PIXHAWK_MESSAGES)
+#include <mavlink_protobuf_manager.hpp>
+#endif
+#endif
+
+
 /**
  * @brief MAVLink micro air vehicle protocol reference implementation.
  *
@@ -57,7 +66,6 @@ public:
     MAVLinkProtocol();
     ~MAVLinkProtocol();
 
-    void run();
     /** @brief Get the human-friendly name of this protocol */
     QString getName();
     /** @brief Get the system id of this application */
@@ -198,10 +206,17 @@ protected:
     int currLossCounter;
     bool versionMismatchIgnore;
     int systemId;
+#if defined(QGC_PROTOBUF_ENABLED) && defined(QGC_USE_PIXHAWK_MESSAGES)
+    mavlink::ProtobufManager protobufManager;
+#endif
 
 signals:
     /** @brief Message received and directly copied via signal */
     void messageReceived(LinkInterface* link, mavlink_message_t message);
+#if defined(QGC_PROTOBUF_ENABLED)
+    /** @brief Message received via signal */
+    void extendedMessageReceived(LinkInterface *link, std::tr1::shared_ptr<google::protobuf::Message> message);
+#endif
     /** @brief Emitted if heartbeat emission mode is changed */
     void heartbeatChanged(bool heartbeats);
     /** @brief Emitted if logging is started / stopped */

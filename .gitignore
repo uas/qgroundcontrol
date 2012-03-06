@@ -6,6 +6,7 @@ tags
 build
 Info.plist
 obj
+.DS_Store
 *.log
 *~
 *~.skp
@@ -31,9 +32,12 @@ deploy/qgroundcontrol*
 controller_log*
 user_config.pri
 *.app
-
 *.ncb
 *.vcproj
+*.vcxproj*
+*.sdf
+*.ipch
+*.pdb
 *.sln
 *.sln
 *.vcproj

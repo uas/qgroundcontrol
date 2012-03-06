@@ -18,9 +18,9 @@
 # -------------------------------------------------
 
 message(Qt version $$[QT_VERSION])
-message(Using Qt from $(QTDIR))
+message(Using Qt from $$(QTDIR))
 
-QT_DIR = $$(QTDIR)
+
 
 release {
 #    DEFINES += QT_NO_DEBUG_OUTPUT
@@ -37,13 +37,13 @@ win32-msvc2008|win32-msvc2010 {
 DEFINES += _TTY_NOWARN_
 
 # MAC OS X
-macx {
+macx|macx-g++42|macx-g++: {
 
    # COMPILER_VERSION = $$system(gcc -v)
     #message(Using compiler $$COMPILER_VERSION)
 
-        CONFIG += x86 cocoa phonon
-        CONFIG -= x86_64
+        CONFIG += x86_64 cocoa phonon
+        CONFIG -= x86
 
     #HARDWARE_PLATFORM = $$system(uname -a)
     #contains( $$HARDWARE_PLATFORM, "9.6.0" ) || contains( $$HARDWARE_PLATFORM, "9.7.0" ) || contains( $$HARDWARE_PLATFORM, "9.8.0" ) || contains( $$HARDWARE_PLATFORM, "9.9.0" ) {
@@ -65,11 +65,10 @@ macx {
       #          debug {
                         #QMAKE_CXXFLAGS += -finstrument-functions
                         #LIBS += -lSaturn
-                        CONFIG += console
       #          }
     #}
 
-    QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.5
+    QMAKE_MACOSX_DEPLOYMENT_TARGET = 10.6
 
     #DESTDIR = $$BASEDIR/bin/mac
     INCLUDEPATH += -framework SDL
@@ -91,84 +90,132 @@ macx {
     # Copy CSS stylesheets
     QMAKE_POST_LINK += && cp -f $$BASEDIR/images/style-mission.css $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/style-indoor.css
     QMAKE_POST_LINK += && cp -f $$BASEDIR/images/style-outdoor.css $$TARGETDIR/qgroundcontrol.app/Contents/MacOS
+    # Copy parameter tooltip files
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$TARGETDIR/qgroundcontrol.app/Contents/MacOS
+    # Copy libraries
+    QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/qgroundcontrol.app/Contents/libs
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/lib/mac64/lib/* $$TARGETDIR/qgroundcontrol.app/Contents/libs
+
+    # Fix library paths inside executable
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosgViewer.dylib "@executable_path/../libs/libosgViewer.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosgGA.dylib "@executable_path/../libs/libosgGA.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosgText.dylib "@executable_path/../libs/libosgText.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+    QMAKE_POST_LINK += && install_name_tool -change libosgWidget.dylib "@executable_path/../libs/libosgWidget.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/MacOS/qgroundcontrol
+
+    # Fix library paths within libraries (inter-library dependencies)
+
+    # OSG GA LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosgGA.dylib "@executable_path/../libs/libosgGA.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgGA.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgGA.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgUtil.dylib "@executable_path/../libs/libosgUtil.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgGA.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgGA.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgGA.dylib
+
+    # OSG DB LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgDB.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgUtil.dylib "@executable_path/../libs/libosgUtil.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgDB.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgDB.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgDB.dylib
+
+    # OSG TEXT LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosgText.dylib "@executable_path/../libs/libosgText.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgText.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgText.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgUtil.dylib "@executable_path/../libs/libosgUtil.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgText.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgText.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgText.dylib
+
+    # OSG UTIL LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgUtil.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgUtil.dylib
+
+
+    # OSG VIEWER LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosgGA.dylib "@executable_path/../libs/libosgGA.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgText.dylib "@executable_path/../libs/libosgText.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgUtil.dylib "@executable_path/../libs/libosgUtil.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgViewer.dylib
+
+    # OSG WIDGET LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libosgGA.dylib "@executable_path/../libs/libosgGA.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgText.dylib "@executable_path/../libs/libosgText.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgDB.dylib "@executable_path/../libs/libosgDB.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgUtil.dylib "@executable_path/../libs/libosgUtil.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosg.dylib "@executable_path/../libs/libosg.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+    QMAKE_POST_LINK += && install_name_tool -change libosgViewer.dylib "@executable_path/../libs/libosgViewer.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosgWidget.dylib
+
+    # CORE OSG LIBRARY
+    QMAKE_POST_LINK += && install_name_tool -change libOpenThreads.dylib "@executable_path/../libs/libOpenThreads.dylib" $$TARGETDIR/qgroundcontrol.app/Contents/libs/libosg.dylib
+
+
     # Copy model files
     #QMAKE_POST_LINK += && cp -f $$BASEDIR/models/*.dae $$TARGETDIR/qgroundcontrol.app/Contents/MacOs
 
-    exists(/Library/Frameworks/osg.framework):exists(/Library/Frameworks/OpenThreads.framework) {
+    #exists(/Library/Frameworks/osg.framework):exists(/Library/Frameworks/OpenThreads.framework) {
     # No check for GLUT.framework since it's a MAC default
     message("Building support for OpenSceneGraph")
     DEPENDENCIES_PRESENT += osg
     DEFINES += QGC_OSG_ENABLED
     # Include OpenSceneGraph libraries
     INCLUDEPATH += -framework GLUT \
-            -framework Carbon \
-            -framework OpenThreads \
-            -framework osg \
-            -framework osgViewer \
-            -framework osgGA \
-            -framework osgDB \
-            -framework osgText \
-            -framework osgWidget
+            -framework Cocoa \
+            $$BASEDIR/lib/mac64/include
 
     LIBS += -framework GLUT \
-            -framework Carbon \
-            -framework OpenThreads \
-            -framework osg \
-            -framework osgViewer \
-            -framework osgGA \
-            -framework osgDB \
-            -framework osgText \
-            -framework osgWidget
+            -framework Cocoa \
+            -L$$BASEDIR/lib/mac64/lib \
+            -lOpenThreads \
+            -losg \
+            -losgViewer \
+            -losgGA \
+            -losgDB \
+            -losgText \
+            -losgWidget
+    #}
+
+    exists(/usr/local/include/google/protobuf) {
+    message("Building support for Protocol Buffers")
+    DEPENDENCIES_PRESENT += protobuf
+    # Include Protocol Buffers libraries
+    LIBS += -L/usr/local/lib \
+            -lprotobuf \
+            -lprotobuf-lite \
+            -lprotoc
+
+    DEFINES += QGC_PROTOBUF_ENABLED
     }
 
-    exists(/usr/include/osgEarth) {
-    message("Building support for osgEarth")
-    DEPENDENCIES_PRESENT += osgearth
-    # Include osgEarth libraries
-    INCLUDEPATH += -framework GDAL \
-            $$IN_PWD/lib/mac32-gcc/include \
-            -framework GEOS \
-            -framework SQLite3 \
-            -framework osgFX \
-            -framework osgTerrain
-
-    LIBS += -framework GDAL \
-            -framework GEOS \
-            -framework SQLite3 \
-            -framework osgFX \
-            -framework osgTerrain
-    DEFINES += QGC_OSGEARTH_ENABLED
-    }
-
-
-    exists(/opt/local/include/libfreenect) {
+    exists(/opt/local/include/libfreenect)|exists(/usr/local/include/libfreenect) {
     message("Building support for libfreenect")
     DEPENDENCIES_PRESENT += libfreenect
     # Include libfreenect libraries
     LIBS += -lfreenect
     DEFINES += QGC_LIBFREENECT_ENABLED
     }
-
-    # osg/osgEarth dynamic casts might fail without this compiler option.
-    # see http://osgearth.org/wiki/FAQ for details.
-    #QMAKE_CXXFLAGS += -Wl,-E
 }
 
 # GNU/Linux
 linux-g++ {
 
+    CONFIG -= console
+
     debug {
-        DESTDIR = $$TARGETDIR/debug
-        CONFIG += debug console
+        #DESTDIR = $$TARGETDIR/debug
+        #CONFIG += debug console
     }
 
     release {
-        DESTDIR = $$TARGETDIR/release
+        #DESTDIR = $$TARGETDIR/release
         DEFINES += QT_NO_DEBUG
-        CONFIG -= console
+        #CONFIG -= console
     }
 
-    QMAKE_POST_LINK += cp -rf $$BASEDIR/audio $$DESTDIR/.
+    #QMAKE_POST_LINK += cp -rf $$BASEDIR/audio $$DESTDIR/.
 
 message("Compiling for linux 32")
 
@@ -181,6 +228,7 @@ message("Compiling for linux 32")
 
     LIBS += \
         -L/usr/lib \
+        -L/usr/local/lib64 \
         -lm \
         -lflite_cmu_us_kal \
         -lflite_usenglish \
@@ -189,7 +237,7 @@ message("Compiling for linux 32")
         -lSDL \
         -lSDLmain
 
-    exists(/usr/include/osg) {
+    exists(/usr/include/osg) | exists(/usr/local/include/osg) {
     message("Building support for OpenSceneGraph")
     DEPENDENCIES_PRESENT += osg
     # Include OpenSceneGraph libraries
@@ -198,18 +246,22 @@ message("Compiling for linux 32")
             -losgGA \
             -losgDB \
             -losgText \
+            -losgQt \
             -lOpenThreads
 
     DEFINES += QGC_OSG_ENABLED
+    DEFINES += QGC_OSG_QT_ENABLED
     }
 
-    exists(/usr/include/osgEarth):exists(/usr/include/osg) | exists(/usr/local/include/osgEarth):exists(/usr/include/osg) {
-    message("Building support for osgEarth")
-    DEPENDENCIES_PRESENT += osgearth
-    # Include osgEarth libraries
-    LIBS += -losgEarth \
-            -losgEarthUtil
-    DEFINES += QGC_OSGEARTH_ENABLED
+    exists(/usr/local/include/google/protobuf) {
+    message("Building support for Protocol Buffers")
+    DEPENDENCIES_PRESENT += protobuf
+    # Include Protocol Buffers libraries
+    LIBS += -lprotobuf \
+            -lprotobuf-lite \
+            -lprotoc
+
+    DEFINES += QGC_PROTOBUF_ENABLED
     }
 
     exists(/usr/local/include/libfreenect/libfreenect.h) {
@@ -222,13 +274,12 @@ message("Compiling for linux 32")
     }
 
     # Validated copy commands
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/audio $$DESTDIR
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$DESTDIR
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/audio $$TARGETDIR
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$TARGETDIR
 
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/models $$DESTDIR
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/data $$DESTDIR
-    QMAKE_POST_LINK += && mkdir -p $$DESTDIR/images
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/images/Vera.ttf $$DESTDIR/images/Vera.ttf
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/data $$TARGETDIR
+    QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/images
+    QMAKE_POST_LINK += && cp -rf $$BASEDIR/images/Vera.ttf $$TARGETDIR/images/Vera.ttf
 
     # osg/osgEarth dynamic casts might fail without this compiler option.
     # see http://osgearth.org/wiki/FAQ for details.
@@ -237,18 +288,20 @@ message("Compiling for linux 32")
 
 linux-g++-64 {
 
+    CONFIG -= console
+
     debug {
-        DESTDIR = $$TARGETDIR/debug
-        CONFIG += debug console
+        #DESTDIR = $$TARGETDIR/debug
+        #CONFIG += debug console
     }
 
     release {
-        DESTDIR = $$TARGETDIR/release
+        #DESTDIR = $$TARGETDIR/release
         DEFINES += QT_NO_DEBUG
-        CONFIG -= console
+        #CONFIG -= console
     }
 
-    QMAKE_POST_LINK += cp -rf $$BASEDIR/audio $$DESTDIR/.
+    #QMAKE_POST_LINK += cp -rf $$BASEDIR/audio $$DESTDIR/.
 
     INCLUDEPATH += /usr/include \
                    /usr/include/qt4/phonon
@@ -259,6 +312,7 @@ linux-g++-64 {
 
     LIBS += \
         -L/usr/lib \
+        -L/usr/local/lib64 \
         -lm \
         -lflite_cmu_us_kal \
         -lflite_usenglish \
@@ -267,7 +321,7 @@ linux-g++-64 {
         -lSDL \
         -lSDLmain
 
-    exists(/usr/include/osg) {
+    exists(/usr/include/osg) | exists(/usr/local/include/osg) {
     message("Building support for OpenSceneGraph")
     DEPENDENCIES_PRESENT += osg
     # Include OpenSceneGraph libraries
@@ -276,18 +330,26 @@ linux-g++-64 {
             -losgGA \
             -losgDB \
             -losgText \
+            -losgQt \
             -lOpenThreads
 
-    DEFINES += QGC_OSG_ENABLED
+    exists(/usr/local/lib64) {
+    LIBS += -L/usr/local/lib64
     }
 
-    exists(/usr/include/osgEarth) {
-    message("Building support for osgEarth")
-    DEPENDENCIES_PRESENT += osgearth
-    # Include osgEarth libraries
-    LIBS += -losgEarth \
-            -losgEarthUtil
-    DEFINES += QGC_OSGEARTH_ENABLED
+    DEFINES += QGC_OSG_ENABLED
+    DEFINES += QGC_OSG_QT_ENABLED
+    }
+
+    exists(/usr/local/include/google/protobuf) {
+    message("Building support for Protocol Buffers")
+    DEPENDENCIES_PRESENT += protobuf
+    # Include Protocol Buffers libraries
+    LIBS += -lprotobuf \
+            -lprotobuf-lite \
+            -lprotoc
+
+    DEFINES += QGC_PROTOBUF_ENABLED
     }
 
     exists(/usr/local/include/libfreenect) {
@@ -300,13 +362,28 @@ linux-g++-64 {
     }
 
     # Validated copy commands
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/audio $$DESTDIR
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$DESTDIR
-
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/models $$DESTDIR
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/data $$DESTDIR
-    QMAKE_POST_LINK += && mkdir -p $$DESTDIR/images
-    QMAKE_POST_LINK += && cp -rf $$BASEDIR/images/Vera.ttf $$DESTDIR/images/Vera.ttf
+    debug {
+        !exists($$TARGETDIR/debug){
+             QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/debug
+        }
+        DESTDIR = $$TARGETDIR/debug
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/audio $$TARGETDIR/debug
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$TARGETDIR/debug
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/data $$TARGETDIR/debug
+        QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/debug/images
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/images/Vera.ttf $$TARGETDIR/debug/images/Vera.ttf
+    }
+    release {
+        !exists($$TARGETDIR/release){
+             QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/release
+        }
+        DESTDIR = $$TARGETDIR/release
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/audio $$TARGETDIR/release
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/files $$TARGETDIR/release
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/data $$TARGETDIR/release
+        QMAKE_POST_LINK += && mkdir -p $$TARGETDIR/release/images
+        QMAKE_POST_LINK += && cp -rf $$BASEDIR/images/Vera.ttf $$TARGETDIR/release/images/Vera.ttf
+    }
 
     # osg/osgEarth dynamic casts might fail without this compiler option.
     # see http://osgearth.org/wiki/FAQ for details.
@@ -374,7 +451,7 @@ DEFINES += QGC_OSG_ENABLED
     # Copy dependencies
     BASEDIR_WIN = $$replace(BASEDIR,"/","\\")
     TARGETDIR_WIN = $$replace(TARGETDIR,"/","\\")
-	QTDIR_WIN = $(QTDIR)
+
 
     exists($$TARGETDIR/debug) {
 	QMAKE_POST_LINK += $$quote(copy /Y "$$BASEDIR_WIN\\lib\\sdl\\win32\\SDL.dll" "$$TARGETDIR_WIN\\debug"$$escape_expand(\\n))
@@ -382,6 +459,7 @@ DEFINES += QGC_OSG_ENABLED
         QMAKE_POST_LINK += $$quote(xcopy /Y "$$BASEDIR_WIN\\files" "$$TARGETDIR_WIN\\debug\\files" /E /I $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(xcopy /Y "$$BASEDIR_WIN\\models" "$$TARGETDIR_WIN\\debug\\models" /E /I $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$BASEDIR_WIN\\images\\earth.html" "$$TARGETDIR_WIN\\debug"$$escape_expand(\\n))
+	QMAKE_POST_LINK += $$quote(copy /Y "$$BASEDIR_WIN\\thirdParty\\libxbee\\lib\\libxbee.dll" "$$TARGETDIR_WIN\\debug"$$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(xcopy /Y "$$(QTDIR)\\plugins" "$$TARGETDIR_WIN\\debug" /E /I /EXCLUDE:copydebug.txt $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$(QTDIR)\\bin\\phonond4.dll" "$$TARGETDIR_WIN\\debug"$$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$(QTDIR)\\bin\\QtCored4.dll" "$$TARGETDIR_WIN\\debug"$$escape_expand(\\n))
@@ -402,6 +480,7 @@ DEFINES += QGC_OSG_ENABLED
         QMAKE_POST_LINK += $$quote(xcopy /Y "$$BASEDIR_WIN\\files" "$$TARGETDIR_WIN\\release\\files" /E /I $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(xcopy /Y "$$BASEDIR_WIN\\models" "$$TARGETDIR_WIN\\release\\models" /E /I $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$BASEDIR_WIN\\images\\earth.html" "$$TARGETDIR_WIN\\release\\earth.html" $$escape_expand(\\n))
+	QMAKE_POST_LINK += $$quote(copy /Y "$$BASEDIR_WIN\\thirdParty\\libxbee\\lib\\libxbee.dll" "$$TARGETDIR_WIN\\release"$$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(xcopy /Y "$$(QTDIR)\\plugins" "$$TARGETDIR_WIN\\release" /E /I /EXCLUDE:copyrelease.txt $$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$(QTDIR)\\bin\\phonon4.dll" "$$TARGETDIR_WIN\\release"$$escape_expand(\\n))
 	QMAKE_POST_LINK += $$quote(copy /Y "$$(QTDIR)\\bin\\QtCore4.dll" "$$TARGETDIR_WIN\\release"$$escape_expand(\\n))
