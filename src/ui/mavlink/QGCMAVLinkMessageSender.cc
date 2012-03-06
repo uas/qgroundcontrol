@@ -18,12 +18,13 @@ QGCMAVLinkMessageSender::QGCMAVLinkMessageSender(MAVLinkProtocol* mavlink, QWidg
     ui->treeWidget->setHeaderLabels(header);
     createTreeView();
     connect(&refreshTimer, SIGNAL(timeout()), this, SLOT(refresh()));
-    refreshTimer.start(1000); // Refresh at 1 Hz interval
+    //refreshTimer.start(1000); // Refresh at 1 Hz interval
+
+    connect(ui->sendButton, SIGNAL(pressed()), this, SLOT(sendMessage()));
 }
 
 void QGCMAVLinkMessageSender::refresh()
 {
-    unsigned int maxUpdateRate = 0;
     // Send messages
     foreach (unsigned int i, managementItems.keys())
     {
@@ -36,8 +37,17 @@ void QGCMAVLinkMessageSender::refresh()
     // ui->treeWidget->topLevelItem(0)->children();
 }
 
+bool QGCMAVLinkMessageSender::sendMessage()
+{
+    return sendMessage(ui->messageIdSpinBox->value());
+}
+
 bool QGCMAVLinkMessageSender::sendMessage(unsigned int msgid)
 {
+    if (msgid == 0 || msgid > 255 || messageInfo[msgid].name == "" || messageInfo[msgid].name == "EMPTY")
+    {
+        return false;
+    }
     bool result = true;
 
     if (treeWidgetItems.contains(msgid))
@@ -79,7 +89,7 @@ bool QGCMAVLinkMessageSender::sendMessage(unsigned int msgid)
                     uint8_t* nums = m+messageInfo[msgid].fields[fieldid].wire_offset;
                     for (unsigned int j = 0; j < messageInfo[msgid].fields[fieldid].array_length; ++j)
                     {
-                        if (field->data(1, Qt::DisplayRole).toString().split(" ").size() > j)
+                        if ((unsigned int)(field->data(1, Qt::DisplayRole).toString().split(" ").size()) > j)
                         {
                             nums[j] = field->data(1, Qt::DisplayRole).toString().split(" ").at(j).toInt();
                         }
@@ -90,6 +100,44 @@ bool QGCMAVLinkMessageSender::sendMessage(unsigned int msgid)
                     // Single value
                     uint8_t* u = (m+messageInfo[msgid].fields[fieldid].wire_offset);
                     *u = field->data(1, Qt::DisplayRole).toChar().toAscii();
+                }
+                break;
+            case MAVLINK_TYPE_INT8_T:
+                if (messageInfo[msgid].fields[fieldid].array_length > 0)
+                {
+                    int8_t* nums = reinterpret_cast<int8_t*>((m+messageInfo[msgid].fields[fieldid].wire_offset));
+                    for (unsigned int j = 0; j < messageInfo[msgid].fields[fieldid].array_length; ++j)
+                    {
+                        if ((unsigned int)(field->data(1, Qt::DisplayRole).toString().split(" ").size()) > j)
+                        {
+                            nums[j] = field->data(1, Qt::DisplayRole).toString().split(" ").at(j).toInt();
+                        }
+                    }
+                }
+                else
+                {
+                    // Single value
+                    int8_t* u = reinterpret_cast<int8_t*>(m+messageInfo[msgid].fields[fieldid].wire_offset);
+                    *u = field->data(1, Qt::DisplayRole).toChar().toAscii();
+                }
+                break;
+            case MAVLINK_TYPE_UINT16_T:
+                if (messageInfo[msgid].fields[fieldid].array_length > 0)
+                {
+                    uint16_t* nums = reinterpret_cast<uint16_t*>(m+messageInfo[msgid].fields[fieldid].wire_offset);
+                    for (unsigned int j = 0; j < messageInfo[msgid].fields[fieldid].array_length; ++j)
+                    {
+                        if ((unsigned int)(field->data(1, Qt::DisplayRole).toString().split(" ").size()) > j)
+                        {
+                            nums[j] = field->data(1, Qt::DisplayRole).toString().split(" ").at(j).toUInt();
+                        }
+                    }
+                }
+                else
+                {
+                    // Single value
+                    uint16_t* u = reinterpret_cast<uint16_t*>(m+messageInfo[msgid].fields[fieldid].wire_offset);
+                    *u = field->data(1, Qt::DisplayRole).toUInt();
                 }
                 break;
                 //            case MAVLINK_TYPE_INT8_T:
@@ -293,6 +341,9 @@ bool QGCMAVLinkMessageSender::sendMessage(unsigned int msgid)
                 //                break;
             }
         }
+
+        // Send message
+        protocol->sendMessage(msg);
     }
     else
     {

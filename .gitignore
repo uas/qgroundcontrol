@@ -3,7 +3,7 @@
 CMakeFiles
 *Makefile*
 tags
-build
+build*/
 Info.plist
 obj
 .DS_Store
@@ -22,7 +22,6 @@ debug
 release
 qgroundcontrol
 mavlinkgen-build-desktop
-*.wav
 qgroundcontrol.xcodeproj/**
 doc/html
 doc/doxy.log

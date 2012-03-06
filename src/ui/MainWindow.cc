@@ -234,8 +234,21 @@ MainWindow::MainWindow(QWidget *parent):
 
 MainWindow::~MainWindow()
 {
-    delete mavlink;
-    delete joystick;
+    if (mavlink)
+    {
+        delete mavlink;
+        mavlink = NULL;
+    }
+//    if (simulationLink)
+//    {
+//        simulationLink->deleteLater();
+//        simulationLink = NULL;
+//    }
+    if (joystick)
+    {
+        delete joystick;
+        joystick = NULL;
+    }
 
     // Get and delete all dockwidgets and contained
     // widgets
@@ -252,10 +265,12 @@ MainWindow::~MainWindow()
             // removeDockWidget(dockWidget);
             // delete dockWidget->widget();
             delete dockWidget;
+            dockWidget = NULL;
         }
-        else if (dynamic_cast<QObject*>(*i))
+        else if (dynamic_cast<QWidget*>(*i))
         {
-            delete dynamic_cast<QObject*>(*i);
+            delete dynamic_cast<QWidget*>(*i);
+            *i = NULL;
         }
     }
     // Delete all UAS objects
@@ -553,7 +568,7 @@ void MainWindow::buildCommonWidgets()
 
 #ifdef QGC_OSG_ENABLED
     if (!_3DWidget) {
-        _3DWidget         = Q3DWidgetFactory::get("PIXHAWK");
+        _3DWidget         = Q3DWidgetFactory::get("PIXHAWK", this);
         addCentralWidget(_3DWidget, tr("Local 3D"));
     }
 #endif
@@ -1167,7 +1182,6 @@ void MainWindow::addLink(LinkInterface *link)
         MAVLinkSimulationLink* sim = dynamic_cast<MAVLinkSimulationLink*>(link);
         if (sim)
         {
-            //connect(sim, SIGNAL(valueChanged(int,QString,double,quint64)), linechart, SLOT(appendData(int,QString,double,quint64)));
             connect(ui.actionSimulate, SIGNAL(triggered(bool)), sim, SLOT(connectLink(bool)));
         }
     }
@@ -1212,23 +1226,24 @@ void MainWindow::UASCreated(UASInterface* uas)
 
         QIcon icon;
         // Set matching icon
-        switch (uas->getSystemType()) {
-        case 0:
+        switch (uas->getSystemType())
+		{
+        case MAV_TYPE_GENERIC:
             icon = QIcon(":/images/mavs/generic.svg");
             break;
-        case 1:
+        case MAV_TYPE_FIXED_WING:
             icon = QIcon(":/images/mavs/fixed-wing.svg");
             break;
-        case 2:
+        case MAV_TYPE_QUADROTOR:
             icon = QIcon(":/images/mavs/quadrotor.svg");
             break;
-        case 3:
+        case MAV_TYPE_COAXIAL:
             icon = QIcon(":/images/mavs/coaxial.svg");
             break;
-        case 4:
+        case MAV_TYPE_HELICOPTER:
             icon = QIcon(":/images/mavs/helicopter.svg");
             break;
-        case 5:
+        case MAV_TYPE_GCS:
             icon = QIcon(":/images/mavs/groundstation.svg");
             break;
         default:

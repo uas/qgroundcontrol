@@ -20,7 +20,7 @@
 
 # Qt configuration
 CONFIG += qt \
-	thread
+    thread
 QT += network \
     opengl \
     svg \
@@ -32,23 +32,35 @@ QT += network \
 TEMPLATE = app
 TARGET = qgroundcontrol
 BASEDIR = $${IN_PWD}
-TARGETDIR = $${OUT_PWD}
-BUILDDIR = $${TARGETDIR}/build
+linux-g++|linux-g++-64{
+    debug {
+        TARGETDIR = $${OUT_PWD}/debug
+        BUILDDIR = $${OUT_PWD}/build-debug
+    }
+    release {
+        TARGETDIR = $${OUT_PWD}/release
+        BUILDDIR = $${OUT_PWD}/build-release
+    }
+} else {
+    TARGETDIR = $${OUT_PWD}
+    BUILDDIR = $${OUT_PWD}/build
+}
 LANGUAGE = C++
 OBJECTS_DIR = $${BUILDDIR}/obj
 MOC_DIR = $${BUILDDIR}/moc
 UI_DIR = $${BUILDDIR}/ui
 RCC_DIR = $${BUILDDIR}/rcc
 MAVLINK_CONF = ""
+MAVLINKPATH = $$BASEDIR/thirdParty/mavlink/include
 DEFINES += MAVLINK_NO_DATA
 
 win32 {
-QMAKE_INCDIR_QT = $$(QTDIR)/include
-QMAKE_LIBDIR_QT = $$(QTDIR)/lib
-QMAKE_UIC = "$$(QTDIR)/bin/uic.exe"
-QMAKE_MOC = "$$(QTDIR)/bin/moc.exe"
-QMAKE_RCC = "$$(QTDIR)/bin/rcc.exe"
-QMAKE_QMAKE = "$$(QTDIR)/bin/qmake.exe"
+    QMAKE_INCDIR_QT = $$(QTDIR)/include
+    QMAKE_LIBDIR_QT = $$(QTDIR)/lib
+    QMAKE_UIC = "$$(QTDIR)/bin/uic.exe"
+    QMAKE_MOC = "$$(QTDIR)/bin/moc.exe"
+    QMAKE_RCC = "$$(QTDIR)/bin/rcc.exe"
+    QMAKE_QMAKE = "$$(QTDIR)/bin/qmake.exe"
 }
 
 
@@ -87,58 +99,47 @@ exists(user_config.pri) {
     message("Adding support for additional MAVLink messages for: " $$MAVLINK_CONF)
     message("------------------------------------------------------------------------")
 }
-INCLUDEPATH += $$BASEDIR/../mavlink/include/common
-INCLUDEPATH += $$BASEDIR/../mavlink/include
-INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/common
-INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include
+INCLUDEPATH += $$MAVLINKPATH/common
+INCLUDEPATH += $$MAVLINKPATH
 contains(MAVLINK_CONF, pixhawk) { 
     # Remove the default set - it is included anyway
-    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
-    INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
+    INCLUDEPATH -= $$MAVLINKPATH/common
 
     # PIXHAWK SPECIAL MESSAGES
-    INCLUDEPATH += $$BASEDIR/../mavlink/include/pixhawk
-    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/pixhawk
+    INCLUDEPATH += $$MAVLINKPATH/pixhawk
     DEFINES += QGC_USE_PIXHAWK_MESSAGES
 }
 contains(MAVLINK_CONF, slugs) { 
     # Remove the default set - it is included anyway
-    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
-    INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
+    INCLUDEPATH -= $$MAVLINKPATH/common
     
     # SLUGS SPECIAL MESSAGES
-    INCLUDEPATH += $$BASEDIR/../mavlink/include/slugs
-    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/slugs
+    INCLUDEPATH += $$MAVLINKPATH/slugs
     DEFINES += QGC_USE_SLUGS_MESSAGES
 }
 contains(MAVLINK_CONF, ualberta) { 
     # Remove the default set - it is included anyway
-    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
-    INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
+    INCLUDEPATH -= $$MAVLINKPATH/common
     
     # UALBERTA SPECIAL MESSAGES
-    INCLUDEPATH += $$BASEDIR/../mavlink/include/ualberta
-    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/ualberta
+    INCLUDEPATH += $$MAVLINKPATH/ualberta
     DEFINES += QGC_USE_UALBERTA_MESSAGES
 }
 contains(MAVLINK_CONF, ardupilotmega) { 
     # Remove the default set - it is included anyway
-    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
+    INCLUDEPATH -= $$MAVLINKPATH/common
     INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
     
     # UALBERTA SPECIAL MESSAGES
-    INCLUDEPATH += $$BASEDIR/../mavlink/include/ardupilotmega
-    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/ardupilotmega
+    INCLUDEPATH += $$MAVLINKPATH/ardupilotmega
     DEFINES += QGC_USE_ARDUPILOTMEGA_MESSAGES
 }
 contains(MAVLINK_CONF, senseSoar) { 
     # Remove the default set - it is included anyway
-    INCLUDEPATH -= $$BASEDIR/../mavlink/include/common
-    INCLUDEPATH -= $$BASEDIR/thirdParty/mavlink/include/common
+    INCLUDEPATH -= $$MAVLINKPATH/common
     
     # SENSESOAR SPECIAL MESSAGES
-    INCLUDEPATH += $$BASEDIR/../mavlink/include/SenseSoar
-    INCLUDEPATH += $$BASEDIR/thirdParty/mavlink/include/SenseSoar
+    INCLUDEPATH += $$MAVLINKPATH/SenseSoar
     DEFINES += QGC_USE_SENSESOAR_MESSAGES
 }
 
@@ -149,6 +150,7 @@ contains(MAVLINK_CONF, senseSoar) {
 include(qgroundcontrol.pri)
 
 # Include MAVLink generator
+# has been deprecated
 DEPENDPATH += \
     src/apps/mavlinkgen
 
@@ -177,7 +179,7 @@ INCLUDEPATH += . \
     src/libs/qextserialport
 
 # Include serial port library (QSerial)
-include(thirdParty/qserialport/qgroundcontrol-qserialport.pri)
+include(qserialport.pri)
 
 # Serial port detection (ripped-off from qextserialport library)
 macx|macx-g++|macx-g++42::SOURCES += src/libs/qextserialport/qextserialenumerator_osx.cpp
@@ -361,8 +363,7 @@ HEADERS += src/MG.h \
     src/ui/mavlink/QGCMAVLinkMessageSender.h \
     src/ui/firmwareupdate/QGCFirmwareUpdateWidget.h \
     src/ui/QGCPluginHost.h \
-    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.h \
-    src/ui/map3D/gpl.h
+    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.h
 
 # Google Earth is only supported on Mac OS and Windows with Visual Studio Compiler
 macx|macx-g++|macx-g++42|win32-msvc2008|win32-msvc2010::HEADERS += src/ui/map3D/QGCGoogleEarthView.h
@@ -370,7 +371,14 @@ contains(DEPENDENCIES_PRESENT, osg) {
     message("Including headers for OpenSceneGraph")
     
     # Enable only if OpenSceneGraph is available
-    HEADERS += src/ui/map3D/Q3DWidget.h \
+    HEADERS += src/ui/map3D/gpl.h \
+        src/ui/map3D/CameraParams.h \
+        src/ui/map3D/ViewParamWidget.h \
+        src/ui/map3D/SystemContainer.h \
+        src/ui/map3D/SystemViewParams.h \
+        src/ui/map3D/GlobalViewParams.h \
+        src/ui/map3D/SystemGroupNode.h \
+        src/ui/map3D/Q3DWidget.h \
         src/ui/map3D/GCManipulator.h \
         src/ui/map3D/ImageWindowGeode.h \
         src/ui/map3D/PixhawkCheetahGeode.h \
@@ -382,14 +390,17 @@ contains(DEPENDENCIES_PRESENT, osg) {
         src/ui/map3D/Texture.h \
         src/ui/map3D/Imagery.h \
         src/ui/map3D/HUDScaleGeode.h \
-        src/ui/map3D/WaypointGroupNode.h
+        src/ui/map3D/WaypointGroupNode.h \
+        src/ui/map3D/TerrainParamDialog.h \
+        src/ui/map3D/ImageryParamDialog.h
 }
 contains(DEPENDENCIES_PRESENT, protobuf):contains(MAVLINK_CONF, pixhawk) {
     message("Including headers for Protocol Buffers")
 
     # Enable only if protobuf is available
     HEADERS += thirdParty/mavlink/include/pixhawk/pixhawk.pb.h \
-               src/ui/map3D/ObstacleGroupNode.h
+        src/ui/map3D/ObstacleGroupNode.h \
+        src/ui/map3D/GLOverlayGeode.h
 }
 contains(DEPENDENCIES_PRESENT, libfreenect) { 
     message("Including headers for libfreenect")
@@ -495,8 +506,7 @@ SOURCES += src/main.cc \
     src/ui/mavlink/QGCMAVLinkMessageSender.cc \
     src/ui/firmwareupdate/QGCFirmwareUpdateWidget.cc \
     src/ui/QGCPluginHost.cc \
-    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.cc \
-    src/ui/map3D/gpl.cc
+    src/ui/firmwareupdate/QGCPX4FirmwareUpdate.cc
 
 # Enable Google Earth only on Mac OS and Windows with Visual Studio compiler
 macx|macx-g++|macx-g++42|win32-msvc2008|win32-msvc2010::SOURCES += src/ui/map3D/QGCGoogleEarthView.cc
@@ -506,7 +516,14 @@ contains(DEPENDENCIES_PRESENT, osg) {
     message("Including sources for OpenSceneGraph")
     
     # Enable only if OpenSceneGraph is available
-    SOURCES += src/ui/map3D/Q3DWidget.cc \
+    SOURCES += src/ui/map3D/gpl.cc \
+        src/ui/map3D/CameraParams.cc \
+        src/ui/map3D/ViewParamWidget.cc \
+        src/ui/map3D/SystemContainer.cc \
+        src/ui/map3D/SystemViewParams.cc \
+        src/ui/map3D/GlobalViewParams.cc \
+        src/ui/map3D/SystemGroupNode.cc \
+        src/ui/map3D/Q3DWidget.cc \
         src/ui/map3D/ImageWindowGeode.cc \
         src/ui/map3D/GCManipulator.cc \
         src/ui/map3D/PixhawkCheetahGeode.cc \
@@ -518,7 +535,10 @@ contains(DEPENDENCIES_PRESENT, osg) {
         src/ui/map3D/Texture.cc \
         src/ui/map3D/Imagery.cc \
         src/ui/map3D/HUDScaleGeode.cc \
-        src/ui/map3D/WaypointGroupNode.cc
+        src/ui/map3D/WaypointGroupNode.cc \
+        src/ui/map3D/TerrainParamDialog.cc \
+        src/ui/map3D/ImageryParamDialog.cc
+
     contains(DEPENDENCIES_PRESENT, osgearth) { 
         message("Including sources for osgEarth")
         
@@ -531,7 +551,8 @@ contains(DEPENDENCIES_PRESENT, protobuf):contains(MAVLINK_CONF, pixhawk) {
 
     # Enable only if protobuf is available
     SOURCES += thirdParty/mavlink/src/pixhawk/pixhawk.pb.cc \
-               src/ui/map3D/ObstacleGroupNode.cc
+        src/ui/map3D/ObstacleGroupNode.cc \
+        src/ui/map3D/GLOverlayGeode.cc
 }
 contains(DEPENDENCIES_PRESENT, libfreenect) { 
     message("Including sources for libfreenect")
@@ -569,19 +590,18 @@ TRANSLATIONS += es-MX.ts \
 
 # xbee support
 # libxbee only supported by linux and windows systems
-win32-msvc2008|win32-msvc2010|linux{
+win32-msvc2008|win32-msvc2010|linux {
     HEADERS += src/comm/XbeeLinkInterface.h \
-	src/comm/XbeeLink.h \
-	src/comm/HexSpinBox.h \
-	src/ui/XbeeConfigurationWindow.h \
-	src/comm/CallConv.h
+        src/comm/XbeeLink.h \
+        src/comm/HexSpinBox.h \
+        src/ui/XbeeConfigurationWindow.h \
+        src/comm/CallConv.h
     SOURCES += src/comm/XbeeLink.cpp \
-	src/comm/HexSpinBox.cpp \
-	src/ui/XbeeConfigurationWindow.cpp
+        src/comm/HexSpinBox.cpp \
+        src/ui/XbeeConfigurationWindow.cpp
     DEFINES += XBEELINK
     INCLUDEPATH += thirdParty/libxbee
-# TO DO: build library when it does not exists already
+# TO DO: build library when it does not exist already
     LIBS += -LthirdParty/libxbee/lib \
-	-llibxbee
-
+        -llibxbee
 }

@@ -33,8 +33,8 @@ This file is part of the QGROUNDCONTROL project
 #define _UAS_H_
 
 #include "UASInterface.h"
-#include "MG.h"
 #include <MAVLinkProtocol.h>
+#include <QVector3D>
 #include "QGCMAVLink.h"
 #include "QGCFlightGearLink.h"
 
@@ -53,7 +53,8 @@ public:
     UAS(MAVLinkProtocol* protocol, int id = 0);
     ~UAS();
 
-    enum BatteryType {
+    enum BatteryType
+    {
         NICD = 0,
         NIMH = 1,
         LIION = 2,
@@ -75,10 +76,13 @@ public:
     const QString& getShortMode() const;
     /** @brief Translate from mode id to text */
     static QString getShortModeTextFor(int id);
+    /** @brief Translate from mode id to audio text */
+    static QString getAudioModeTextFor(int id);
     /** @brief Get the unique system id */
     int getUASID() const;
     /** @brief Get the airframe */
-    int getAirframe() const {
+    int getAirframe() const
+    {
         return airframe;
     }
     /** @brief Get the components */
@@ -105,13 +109,16 @@ public:
     {
         return localZ;
     }
-    double getLatitude() const {
+    double getLatitude() const
+    {
         return latitude;
     }
-    double getLongitude() const {
+    double getLongitude() const
+    {
         return longitude;
     }
-    double getAltitude() const {
+    double getAltitude() const
+    {
         return altitude;
     }
     virtual bool localPositionKnown() const
@@ -123,38 +130,42 @@ public:
         return isGlobalPositionKnown;
     }
 
-    double getRoll() const {
+    double getRoll() const
+    {
         return roll;
     }
-    double getPitch() const {
+    double getPitch() const
+    {
         return pitch;
     }
-    double getYaw() const {
+    double getYaw() const
+    {
         return yaw;
     }
     bool getSelected() const;
 
+    QVector3D getNedPosGlobalOffset() const
+    {
+        return nedPosGlobalOffset;
+    }
+
+    QVector3D getNedAttGlobalOffset() const
+    {
+        return nedAttGlobalOffset;
+    }
+
 #if defined(QGC_PROTOBUF_ENABLED) && defined(QGC_USE_PIXHAWK_MESSAGES)
-    px::PointCloudXYZRGB getPointCloud() {
-        QMutexLocker locker(&pointCloudMutex);
-        return pointCloud;
+    px::GLOverlay getOverlay()
+    {
+        QMutexLocker locker(&overlayMutex);
+        return overlay;
     }
 
-    px::PointCloudXYZRGB getPointCloud(qreal& receivedTimestamp) {
-        receivedTimestamp = receivedPointCloudTimestamp;
-        QMutexLocker locker(&pointCloudMutex);
-        return pointCloud;
-    }
-
-    px::RGBDImage getRGBDImage() {
-        QMutexLocker locker(&rgbdImageMutex);
-        return rgbdImage;
-    }
-
-    px::RGBDImage getRGBDImage(qreal& receivedTimestamp) {
-        receivedTimestamp = receivedRGBDImageTimestamp;
-        QMutexLocker locker(&rgbdImageMutex);
-        return rgbdImage;
+    px::GLOverlay getOverlay(qreal& receivedTimestamp)
+    {
+        receivedTimestamp = receivedOverlayTimestamp;
+        QMutexLocker locker(&overlayMutex);
+        return overlay;
     }
 
     px::ObstacleList getObstacleList() {
@@ -177,6 +188,28 @@ public:
         receivedTimestamp = receivedPathTimestamp;
         QMutexLocker locker(&pathMutex);
         return path;
+    }
+
+    px::PointCloudXYZRGB getPointCloud() {
+        QMutexLocker locker(&pointCloudMutex);
+        return pointCloud;
+    }
+
+    px::PointCloudXYZRGB getPointCloud(qreal& receivedTimestamp) {
+        receivedTimestamp = receivedPointCloudTimestamp;
+        QMutexLocker locker(&pointCloudMutex);
+        return pointCloud;
+    }
+
+    px::RGBDImage getRGBDImage() {
+        QMutexLocker locker(&rgbdImageMutex);
+        return rgbdImage;
+    }
+
+    px::RGBDImage getRGBDImage(qreal& receivedTimestamp) {
+        receivedTimestamp = receivedRGBDImageTimestamp;
+        QMutexLocker locker(&rgbdImageMutex);
+        return rgbdImage;
     }
 #endif
 
@@ -211,6 +244,9 @@ protected: //COMMENTS FOR TEST UNIT
     float fullVoltage;          ///< Voltage of the fully charged battery (100%)
     float emptyVoltage;         ///< Voltage of the empty battery (0%)
     float startVoltage;         ///< Voltage at system start
+    float tickVoltage;          ///< Voltage where 0.1 V ticks are told
+    float lastTickVoltageValue; ///< The last voltage where a tick was announced
+    float tickLowpassVoltage;   ///< Lowpass-filtered voltage for the tick announcement
     float warnVoltage;          ///< Voltage where QGC will start to warn about low battery
     float warnLevelPercent;     ///< Warning level, in percent
     double currentVoltage;      ///< Voltage currently measured
@@ -218,7 +254,8 @@ protected: //COMMENTS FOR TEST UNIT
     bool batteryRemainingEstimateEnabled; ///< If the estimate is enabled, QGC will try to estimate the remaining battery life
     float chargeLevel;          ///< Charge level of battery, in percent
     int timeRemaining;          ///< Remaining time calculated based on previous and current
-    uint8_t mode;                   ///< The current mode of the MAV
+    uint8_t mode;              ///< The current mode of the MAV
+    uint32_t custom_mode;       ///< The current mode of the MAV
     int status;                 ///< The current status of the MAV
     uint32_t navMode;                ///< The current navigation mode of the MAV
     quint64 onboardTimeOffset;
@@ -264,13 +301,9 @@ protected: //COMMENTS FOR TEST UNIT
     quint64 imageStart;
 
 #if defined(QGC_PROTOBUF_ENABLED) && defined(QGC_USE_PIXHAWK_MESSAGES)
-    px::PointCloudXYZRGB pointCloud;
-    QMutex pointCloudMutex;
-    qreal receivedPointCloudTimestamp;
-
-    px::RGBDImage rgbdImage;
-    QMutex rgbdImageMutex;
-    qreal receivedRGBDImageTimestamp;
+    px::GLOverlay overlay;
+    QMutex overlayMutex;
+    qreal receivedOverlayTimestamp;
 
     px::ObstacleList obstacleList;
     QMutex obstacleListMutex;
@@ -279,6 +312,14 @@ protected: //COMMENTS FOR TEST UNIT
     px::Path path;
     QMutex pathMutex;
     qreal receivedPathTimestamp;
+
+    px::PointCloudXYZRGB pointCloud;
+    QMutex pointCloudMutex;
+    qreal receivedPointCloudTimestamp;
+
+    px::RGBDImage rgbdImage;
+    QMutex rgbdImageMutex;
+    qreal receivedRGBDImageTimestamp;
 #endif
 
     QMap<int, QMap<QString, QVariant>* > parameters; ///< All parameters
@@ -294,6 +335,8 @@ protected: //COMMENTS FOR TEST UNIT
     bool isLocalPositionKnown;      ///< If the local position has been received for this MAV
     bool isGlobalPositionKnown;     ///< If the global position has been received for this MAV
     bool systemIsArmed;             ///< If the system is armed
+    QVector3D nedPosGlobalOffset;   ///< Offset between the system's NED position measurements and the swarm / global 0/0/0 origin
+    QVector3D nedAttGlobalOffset;   ///< Offset between the system's NED position measurements and the swarm / global 0/0/0 origin
 
 public:
     /** @brief Set the current battery type */
@@ -610,16 +653,6 @@ signals:
     void imageStarted(quint64 timestamp);
     /** @brief A new camera image has arrived */
     void imageReady(UASInterface* uas);
-#if defined(QGC_PROTOBUF_ENABLED) && defined(QGC_USE_PIXHAWK_MESSAGES)
-    /** @brief Point cloud data has been changed */
-    void pointCloudChanged(UASInterface* uas);
-    /** @brief RGBD image data has been changed */
-    void rgbdImageChanged(UASInterface* uas);
-    /** @brief Obstacle list data has been changed */
-    void obstacleListChanged(UASInterface* uas);
-    /** @brief Path data has been changed */
-    void pathChanged(UASInterface* uas);
-#endif
     /** @brief HIL controls have changed */
     void hilControlsChanged(uint64_t time, float rollAilerons, float pitchElevator, float yawRudder, float throttle, uint8_t systemMode, uint8_t navMode);
 

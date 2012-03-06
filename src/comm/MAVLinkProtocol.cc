@@ -188,19 +188,23 @@ void MAVLinkProtocol::receiveBytes(LinkInterface* link, QByteArray b)
     mavlink_message_t message;
     mavlink_status_t status;
 
+    static int mavlink09Count = 0;
+    static bool decodedFirstPacket = false;
+
     for (int position = 0; position < b.size(); position++) {
-        unsigned int decodeState = mavlink_parse_char(link->getId(), (uint8_t)(b.at(position)), &message, &status);
+        unsigned int decodeState = mavlink_parse_char(link->getId(), (uint8_t)(b[position]), &message, &status);
+
+        if ((uint8_t)b[position] == 0x55) mavlink09Count++;
+        if ((mavlink09Count > 100) && !decodedFirstPacket)
+        {
+            // Obviously the user tries to use a 0.9 autopilot
+            // with QGroundControl built for version 1.0
+            emit protocolStatusMessage("MAVLink Version Mismatch", "Your MAVLink device seems to use the deprecated version 0.9, while QGroundControl only supports version 1.0+. Please upgrade the MAVLink version of your autopilot.");
+        }
 
         if (decodeState == 1)
         {
-//#ifdef MAVLINK_MESSAGE_LENGTHS
-//	    const uint8_t message_lengths[] = MAVLINK_MESSAGE_LENGTHS;
-//	    if (message.msgid >= sizeof(message_lengths) ||
-//		message.len != message_lengths[message.msgid]) {
-//                    qDebug() << "MAVLink message " << message.msgid << " length incorrect (was " << message.len << " expected " << message_lengths[message.msgid] << ")";
-//		    continue;
-//	    }
-//#endif
+            decodedFirstPacket = true;
 #if defined(QGC_PROTOBUF_ENABLED)
 
             if (message.msgid == MAVLINK_MSG_ID_EXTENDED_MESSAGE)
@@ -344,39 +348,46 @@ void MAVLinkProtocol::receiveBytes(LinkInterface* link, QByteArray b)
             // Only count message if UAS exists for this message
             if (uas != NULL)
             {
+
                 // Increase receive counter
                 totalReceiveCounter++;
                 currReceiveCounter++;
-                // Update last packet index
+
+                // Update last message sequence ID
+                uint8_t expectedIndex;
                 if (lastIndex[message.sysid][message.compid] == -1)
                 {
                     lastIndex[message.sysid][message.compid] = message.seq;
+                    expectedIndex = message.seq;
                 }
                 else
                 {
-                    uint8_t expectedIndex = lastIndex[message.sysid][message.compid];
-                    // Now increase to the expected index
-                    expectedIndex++;
-
-                    //qDebug() << "SYSID" << message.sysid << "COMPID" << message.compid << "MSGID" << message.msgid << "EXPECTED INDEX:" << expectedIndex << "SEQ" << message.seq;
-                    while(expectedIndex != message.seq)
-                    {
-                        expectedIndex++;
-                        totalLossCounter++;
-                        currLossCounter++;
-                        //qDebug() << "COUNTING ONE DROP!";
-                    }
-
-                    // Set new lastindex
-                    lastIndex[message.sysid][message.compid] = message.seq;
+                    // NOTE: Using uint8_t here auto-wraps the number around to 0.
+                    expectedIndex = lastIndex[message.sysid][message.compid] + 1;
                 }
-                //            if (lastIndex.contains(message.sysid))
-                //            {
-                //                QMap<int, int>* lastCompIndex = lastIndex.value(message.sysid);
-                //                if (lastCompIndex->contains(message.compid))
-                //                while (lastCompIndex->value(message.compid, 0)+1 )
-                //            }
-                //if ()
+
+                // Make some noise if a message was skipped
+                //qDebug() << "SYSID" << message.sysid << "COMPID" << message.compid << "MSGID" << message.msgid << "EXPECTED INDEX:" << expectedIndex << "SEQ" << message.seq;
+                if (message.seq != expectedIndex)
+                {
+                    // Determine how many messages were skipped accounting for 0-wraparound
+                    int16_t lostMessages = message.seq - expectedIndex; 
+                    if (lostMessages < 0)
+                    {
+                        // Usually, this happens in the case of an out-of order packet
+                        lostMessages = 0;
+                    }
+                    else
+                    {
+                        // Console generates excessive load at high loss rates, needs better GUI visualization
+                        //qDebug() << QString("Lost %1 messages for comp %4: expected sequence ID %2 but received %3.").arg(lostMessages).arg(expectedIndex).arg(message.seq).arg(message.compid);
+                    }
+                    totalLossCounter += lostMessages;
+                    currLossCounter += lostMessages;
+                }
+
+                // Update the last sequence ID
+                lastIndex[message.sysid][message.compid] = message.seq;
 
                 // Update on every 32th packet
                 if (totalReceiveCounter % 32 == 0)
@@ -385,11 +396,9 @@ void MAVLinkProtocol::receiveBytes(LinkInterface* link, QByteArray b)
                     // Receive loss
                     float receiveLoss = (double)currLossCounter/(double)(currReceiveCounter+currLossCounter);
                     receiveLoss *= 100.0f;
-                    // qDebug() << "LOSSCHANGED" << receiveLoss;
                     currLossCounter = 0;
                     currReceiveCounter = 0;
                     emit receiveLossChanged(message.sysid, receiveLoss);
-                    //qDebug() << "LOSSCHANGED" << message.sysid<<" "<<receiveLoss;
                 }
 
                 // The packet is emitted as a whole, as it is only 255 - 261 bytes short
@@ -414,7 +423,6 @@ void MAVLinkProtocol::receiveBytes(LinkInterface* link, QByteArray b)
             }
         }
     }
-//    receiveMutex.unlock();
 }
 
 /**
@@ -466,7 +474,7 @@ void MAVLinkProtocol::sendMessage(mavlink_message_t message)
 void MAVLinkProtocol::sendMessage(LinkInterface* link, mavlink_message_t message)
 {
     // Create buffer
-    uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
+    static uint8_t buffer[MAVLINK_MAX_PACKET_LEN];
     // Rewriting header to ensure correct link ID is set
     static uint8_t messageKeys[256] = MAVLINK_MESSAGE_CRCS;
     if (link->getId() != 0) mavlink_finalize_message_chan(&message, this->getSystemId(), this->getComponentId(), link->getId(), message.len, messageKeys[message.msgid]);
@@ -487,12 +495,14 @@ void MAVLinkProtocol::sendMessage(LinkInterface* link, mavlink_message_t message
  */
 void MAVLinkProtocol::sendHeartbeat()
 {
-    if (m_heartbeatsEnabled) {
+    if (m_heartbeatsEnabled)
+    {
         mavlink_message_t beat;
         mavlink_msg_heartbeat_pack(getSystemId(), getComponentId(),&beat, MAV_TYPE_GCS, MAV_AUTOPILOT_INVALID, MAV_MODE_MANUAL_ARMED, 0, MAV_STATE_ACTIVE);
         sendMessage(beat);
     }
-    if (m_authEnabled) {
+    if (m_authEnabled)
+    {
         mavlink_message_t msg;
         mavlink_auth_key_t auth;
         if (m_authKey.length() != MAVLINK_MSG_AUTH_KEY_FIELD_KEY_LEN) m_authKey.resize(MAVLINK_MSG_AUTH_KEY_FIELD_KEY_LEN);
