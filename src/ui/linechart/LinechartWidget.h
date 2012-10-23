@@ -163,7 +163,6 @@ protected:
     QToolButton* scalingLinearButton;
     QToolButton* scalingLogButton;
     QToolButton* logButton;
-    QPointer<QCheckBox> unitsCheckBox;
     QPointer<QCheckBox> timeButton;
 
     QFile* logFile;
@@ -174,6 +173,9 @@ protected:
     LogCompressor* compressor;
     QCheckBox* selectAllCheckBox;
     int selectedMAV; ///< The MAV for which plot items are accepted, -1 for all systems
+    quint64 lastTimestamp;
+    bool userGroundTimeSet;
+    bool autoGroundTimeSet;
     static const int updateInterval = 1000; ///< Time between number updates, in milliseconds
 
     static const int MAX_CURVE_MENUITEM_NUMBER = 8;

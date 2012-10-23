@@ -135,8 +135,6 @@ LinechartWidget::LinechartWidget(int systemid, QWidget *parent) : QWidget(parent
     variance->setText("Variance");
     curvesWidgetLayout->addWidget(variance, labelRow, 6);
 
-    // Add and customize plot elements (right side)
-
     // Create the layout
     createLayout();
 
@@ -183,8 +181,9 @@ void LinechartWidget::writeSettings()
 {
     QSettings settings;
     settings.beginGroup("LINECHART");
-    if (timeButton) settings.setValue("ENFORCE_GROUNDTIME", timeButton->isChecked());
-    if (unitsCheckBox) settings.setValue("SHOW_UNITS", unitsCheckBox->isChecked());
+    bool enforceGT = (!autoGroundTimeSet && timeButton->isChecked()) ? true : false;
+    if (timeButton) settings.setValue("ENFORCE_GROUNDTIME", enforceGT);
+    if (ui.showUnitsCheckBox) settings.setValue("SHOW_UNITS", ui.showUnitsCheckBox->isChecked());
     if (ui.shortNameCheckBox) settings.setValue("SHORT_NAMES", ui.shortNameCheckBox->isChecked());
     settings.endGroup();
     settings.sync();
@@ -199,8 +198,9 @@ void LinechartWidget::readSettings()
         timeButton->setChecked(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
         activePlot->enforceGroundTime(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
         timeButton->setChecked(settings.value("ENFORCE_GROUNDTIME", timeButton->isChecked()).toBool());
+        //userGroundTimeSet = settings.value("USER_GROUNDTIME", timeButton->isChecked()).toBool();
     }
-    if (unitsCheckBox) unitsCheckBox->setChecked(settings.value("SHOW_UNITS", unitsCheckBox->isChecked()).toBool());
+    if (ui.showUnitsCheckBox) ui.showUnitsCheckBox->setChecked(settings.value("SHOW_UNITS", ui.showUnitsCheckBox->isChecked()).toBool());
     if (ui.shortNameCheckBox) ui.shortNameCheckBox->setChecked(settings.value("SHORT_NAMES", ui.shortNameCheckBox->isChecked()).toBool());
     settings.endGroup();
 }
@@ -278,13 +278,9 @@ void LinechartWidget::createLayout()
     connect(timeButton, SIGNAL(clicked(bool)), activePlot, SLOT(enforceGroundTime(bool)));
     connect(timeButton, SIGNAL(clicked()), this, SLOT(writeSettings()));
 
-    unitsCheckBox = new QCheckBox(this);
-    unitsCheckBox->setText(tr("Show units"));
-    unitsCheckBox->setChecked(true);
-    unitsCheckBox->setToolTip(tr("Enable unit display in curve list"));
-    unitsCheckBox->setWhatsThis(tr("Enable unit display in curve list"));
-    layout->addWidget(unitsCheckBox, 1, 5);
-    connect(unitsCheckBox, SIGNAL(clicked()), this, SLOT(writeSettings()));
+    // Initialize the "Show units" checkbox. This is configured in the .ui file, so all
+    // we do here is attach the clicked() signal.
+    connect(ui.showUnitsCheckBox, SIGNAL(clicked()), this, SLOT(writeSettings()));
 
     ui.diagramGroupBox->setLayout(layout);
 
@@ -355,18 +351,29 @@ void LinechartWidget::appendData(int uasId, const QString& curve, const QString&
         intData.insert(curve+unit, value);
     }
 
+    if (lastTimestamp == 0 && usec != 0)
+    {
+        lastTimestamp = usec;
+    } else if (usec != 0) {
+        // Difference larger than 5 secs, enforce ground time
+        if (abs((int)((qint64)usec - (quint64)lastTimestamp)) > 5000)
+        {
+            autoGroundTimeSet = true;
+            if (activePlot) activePlot->groundTime();
+        }
+    }
+
     // Log data
     if (logging)
     {
         if (activePlot->isVisible(curve+unit))
         {
-            if (usec == 0) usec = QGC::groundTimeMilliseconds();
+            if (usec == 0 || autoGroundTimeSet) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
 
             logFile->write(QString(QString::number(time) + "\t" + QString::number(uasId) + "\t" + curve + "\t" + QString::number(value) + "\n").toLatin1());
-            logFile->flush();
         }
     }
 }
@@ -390,12 +397,24 @@ void LinechartWidget::appendData(int uasId, const QString& curve, const QString&
         intData.insert(curve+unit, value);
     }
 
+    if (lastTimestamp == 0 && usec != 0)
+    {
+        lastTimestamp = usec;
+    } else if (usec != 0) {
+        // Difference larger than 5 secs, enforce ground time
+        if (abs((int)((qint64)usec - (quint64)lastTimestamp)) > 5000)
+        {
+            autoGroundTimeSet = true;
+            if (activePlot) activePlot->groundTime();
+        }
+    }
+
     // Log data
     if (logging)
     {
         if (activePlot->isVisible(curve+unit))
         {
-            if (usec == 0) usec = QGC::groundTimeMilliseconds();
+            if (usec == 0 || autoGroundTimeSet) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
@@ -422,12 +441,24 @@ void LinechartWidget::appendData(int uasId, const QString& curve, const QString&
         }
     }
 
+    if (lastTimestamp == 0 && usec != 0)
+    {
+        lastTimestamp = usec;
+    } else if (usec != 0) {
+        // Difference larger than 1 sec, enforce ground time
+        if (abs((int)((qint64)usec - (quint64)lastTimestamp)) > 1000)
+        {
+            autoGroundTimeSet = true;
+            if (activePlot) activePlot->groundTime();
+        }
+    }
+
     // Log data
     if (logging)
     {
         if (activePlot->isVisible(curve+unit))
         {
-            if (usec == 0) usec = QGC::groundTimeMilliseconds();
+            if (usec == 0 || autoGroundTimeSet) usec = QGC::groundTimeMilliseconds();
             if (logStartTime == 0) logStartTime = usec;
             qint64 time = usec - logStartTime;
             if (time < 0) time = 0;
@@ -671,8 +702,8 @@ void LinechartWidget::addCurve(const QString& curve, const QString& unit)
     unitLabel->setToolTip(tr("Unit of ") + curve);
     unitLabel->setWhatsThis(tr("Unit of ") + curve);
     curvesWidgetLayout->addWidget(unitLabel, labelRow, 4);
-    unitLabel->setVisible(unitsCheckBox->isChecked());
-    connect(unitsCheckBox, SIGNAL(clicked(bool)), unitLabel, SLOT(setVisible(bool)));
+    unitLabel->setVisible(ui.showUnitsCheckBox->isChecked());
+    connect(ui.showUnitsCheckBox, SIGNAL(clicked(bool)), unitLabel, SLOT(setVisible(bool)));
 
     // Mean
     mean = new QLabel(this);

@@ -55,9 +55,9 @@ public slots:
     /** @brief Received system text message */
     void receiveTextMessage(int uasid, int componentid, int severity, QString text);
     /** @brief Start / stop logging */
-    void logging(bool enabled);
+    void logging(bool checked);
     /** @brief Start playing logfile */
-    void playLogFile(bool enabled);
+    void playLogFile(bool checked);
     /** @brief Set log playing component */
     void setLogPlayer(QGCMAVLinkLogPlayer* player);
     /** @brief Update battery charge state */
@@ -70,6 +70,8 @@ public slots:
     void updateArmingState(bool armed);
     /** @brief Repaint widgets */
     void updateView();
+    /** @brief Update connection timeout time */
+    void heartbeatTimeout(bool timeout, unsigned int ms);
 
 protected:
     void createCustomWidgets();
@@ -79,6 +81,7 @@ protected:
     UASInterface* mav;
     QToolButton* symbolButton;
     QLabel* toolBarNameLabel;
+    QLabel* toolBarTimeoutLabel;
     QLabel* toolBarSafetyLabel;
     QLabel* toolBarModeLabel;
     QLabel* toolBarStateLabel;
