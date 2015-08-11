@@ -31,7 +31,7 @@ This file is part of the QGROUNDCONTROL project
 #ifndef _MAINWINDOW_H_
 #define _MAINWINDOW_H_
 
-#include <QtGui/QMainWindow>
+#include <QMainWindow>
 #include <QStatusBar>
 #include <QStackedWidget>
 #include <QSettings>
@@ -43,46 +43,38 @@ This file is part of the QGROUNDCONTROL project
 #include "UASInterface.h"
 #include "UASManager.h"
 #include "UASControlWidget.h"
-#include "Linecharts.h"
 #include "UASInfoWidget.h"
 #include "WaypointList.h"
 #include "CameraView.h"
 #include "UASListWidget.h"
-#include "MAVLinkProtocol.h"
-#include "MAVLinkSimulationLink.h"
-#include "ObjectDetectionView.h"
-#include "HUD.h"
-#include "JoystickWidget.h"
+#ifndef __mobile__
 #include "input/JoystickInput.h"
-#include "DebugConsole.h"
-#include "ParameterInterface.h"
-#include "XMLCommProtocolWidget.h"
-#include "HDDisplay.h"
-#include "WatchdogControl.h"
-#include "HSIDisplay.h"
-#include "QGCDataPlot2D.h"
-#include "QGCRemoteControlView.h"
-#include "opmapcontrol.h"
-#if (defined Q_OS_MAC) | (defined _MSC_VER)
-#include "QGCGoogleEarthView.h"
 #endif
-#include "QGCToolBar.h"
-#include "SlugsDataSensorView.h"
+#if (defined QGC_MOUSE_ENABLED_WIN) | (defined QGC_MOUSE_ENABLED_LINUX)
+#include "Mouse6dofInput.h"
+#endif // QGC_MOUSE_ENABLED_WIN
+#include "ParameterEditorWidget.h"
+#include "HDDisplay.h"
+#include "HSIDisplay.h"
+#include "opmapcontrol.h"
+#include "MainToolBar.h"
 #include "LogCompressor.h"
 
-#include "SlugsHilSim.h"
-
-#include "SlugsPadCameraControl.h"
-#include "UASControlParameters.h"
+#include "FlightDisplay.h"
 #include "QGCMAVLinkInspector.h"
 #include "QGCMAVLinkLogPlayer.h"
-#include "QGCVehicleConfig.h"
 #include "MAVLinkDecoder.h"
+#include "QGCUASFileViewMulti.h"
 
 class QGCMapTool;
 class QGCMAVLinkMessageSender;
 class QGCFirmwareUpdate;
 class QSplashScreen;
+class QGCStatusBar;
+class Linecharts;
+class QGCDataPlot2D;
+class QGCUASFileViewMulti;
+class FlightDisplay;
 
 /**
  * @brief Main Application Window
@@ -90,80 +82,79 @@ class QSplashScreen;
  **/
 class MainWindow : public QMainWindow
 {
+    friend class MainToolBar;
     Q_OBJECT
 
 public:
-    static MainWindow* instance(QSplashScreen* screen = 0);
+    /// @brief Returns the MainWindow singleton. Will not create the MainWindow if it has not already
+    ///         been created.
+    static MainWindow* instance(void);
+
+    /// @brief Deletes the MainWindow singleton
+    void deleteInstance(void);
+
+    /// @brief Creates the MainWindow singleton. Should only be called once by QGCApplication.
+    static MainWindow* _create(QSplashScreen* splashScreen);
+
+    /// @brief Called to indicate that splash screen is no longer being displayed.
+    void splashScreenFinished(void) { _splashScreen = NULL; }
+
     ~MainWindow();
 
-    enum QGC_MAINWINDOW_STYLE
-    {
-        QGC_MAINWINDOW_STYLE_NATIVE,
-        QGC_MAINWINDOW_STYLE_INDOOR,
-        QGC_MAINWINDOW_STYLE_OUTDOOR
-    };
 
-    /** @brief Get current visual style */
-    int getStyle()
-    {
-        return currentStyle;
-    }
     /** @brief Get auto link reconnect setting */
-    bool autoReconnectEnabled()
+    bool autoReconnectEnabled() const
     {
-        return autoReconnect;
+        return _autoReconnect;
     }
 
     /** @brief Get low power mode setting */
-    bool lowPowerModeEnabled()
+    bool lowPowerModeEnabled() const
     {
-        return lowPowerMode;
+        return _lowPowerMode;
     }
 
-    QList<QAction*> listLinkMenuActions(void);
+    void hideSplashScreen(void);
+
+    /// @brief Saves the last used connection
+    void saveLastUsedConnection(const QString connection);
+
+    /// @brief Restore (and connects) the last used connection (if any)
+    void restoreLastUsedConnection();
+    
+    /// @brief Gets a pointer to the Main Tool Bar
+    MainToolBar* getMainToolBar(void) { return _mainToolBar; }
+
+    /// @brief Gets a pointer to the Main Flight Display
+    FlightDisplay* getFlightDisplay() { return dynamic_cast<FlightDisplay*>(_flightView.data()); }
+    
+    QWidget* getCurrentViewWidget(void) { return _currentViewWidget; }
 
 public slots:
-
-    /** @brief Shows a status message on the bottom status bar */
-    void showStatusMessage(const QString& status, int timeout);
-    /** @brief Shows a status message on the bottom status bar */
-    void showStatusMessage(const QString& status);
-    /** @brief Shows a critical message as popup or as widget */
-    void showCriticalMessage(const QString& title, const QString& message);
-    /** @brief Shows an info message as popup or as widget */
-    void showInfoMessage(const QString& title, const QString& message);
-
     /** @brief Show the application settings */
     void showSettings();
-    /** @brief Add a communication link */
-    void addLink();
-    void addLink(LinkInterface* link);
-    void configure();
-    /** @brief Set the currently controlled UAS */
-    void setActiveUAS(UASInterface* uas);
 
     /** @brief Add a new UAS */
     void UASCreated(UASInterface* uas);
-    /** Delete an UAS */
-    void UASDeleted(UASInterface* uas);
-    /** @brief Update system specs of a UAS */
-    void UASSpecsChanged(int uas);
-    void startVideoCapture();
-    void stopVideoCapture();
-    void saveScreen();
 
-    /** @brief Load default view when no MAV is connected */
-    void loadUnconnectedView();
+    /** @brief Remove an old UAS */
+    void UASDeleted(int uasID);
+
+    void handleMisconfiguration(UASInterface* uas);
+    /** @brief Load configuration views */
+    void loadSetupView();
     /** @brief Load view for pilot */
-    void loadPilotView();
+    void loadFlightView();
+    /** @brief Load view for simulation */
+    void loadSimulationView();
     /** @brief Load view for engineer */
-    void loadEngineerView();
-    /** @brief Load view for operator */
-    void loadOperatorView();
-    /** @brief Load MAVLink XML generator view */
-    void loadMAVLinkView();
-    /** @brief Load firmware update view */
-    void loadFirmwareUpdateView();
+    void loadAnalyzeView();
+    /** @brief Load New (QtQuick) Map View (Mission) */
+    void loadPlanView();
+    /** @brief Load Old (Qt Widget) Map View (Mission) */
+    void loadOldPlanView();
+    /** @brief Manage Links */
+    void manageLinks();
 
     /** @brief Show the online help for users */
     void showHelp();
@@ -172,63 +163,48 @@ public slots:
     /** @brief Show the project roadmap */
     void showRoadMap();
 
-    /** @brief Reload the CSS style sheet */
-    void reloadStylesheet();
-    /** @brief Let the user select the CSS style sheet */
-    void selectStylesheet();
     /** @brief Automatically reconnect last link */
     void enableAutoReconnect(bool enabled);
+
     /** @brief Save power by reducing update rates */
-    void enableLowPowerMode(bool enabled) { lowPowerMode = enabled; }
-    /** @brief Switch to native application style */
-    void loadNativeStyle();
-    /** @brief Switch to indoor mission style */
-    void loadIndoorStyle();
-    /** @brief Switch to outdoor mission style */
-    void loadOutdoorStyle();
-    /** @brief Load a specific style */
-    void loadStyle(QGC_MAINWINDOW_STYLE style);
-
-    /** @brief Add a custom tool widget */
-    void createCustomWidget();
-
-    /** @brief Load a custom tool widget from a file chosen by user (QFileDialog) */
-    void loadCustomWidget();
-
-    /** @brief Load a custom tool widget from a file */
-    void loadCustomWidget(const QString& fileName, bool singleinstance=false);
-
-    /** @brief Load custom widgets from default file */
-    void loadCustomWidgetsFromDefaults(const QString& systemType, const QString& autopilotType);
+    void enableLowPowerMode(bool enabled) { _lowPowerMode = enabled; }
 
     void closeEvent(QCloseEvent* event);
-
-    /** @brief Load data view, allowing to plot flight data */
-    void loadDataView(QString fileName);
-
-    /**
-     * @brief Shows a Docked Widget based on the action sender
-     *
-     * This slot is written to be used in conjunction with the addTool() function
-     * It shows the QDockedWidget based on the action sender
-     *
-     */
-    void showTool(bool visible);
-
-    /**
-     * @brief Shows a Widget from the center stack based on the action sender
-     *
-     * This slot is written to be used in conjunction with the addCentralWidget() function
-     * It shows the Widget based on the action sender
-     *
-     */
-    void showCentralWidget();
 
     /** @brief Update the window name */
     void configureWindowName();
 
+    void commsWidgetDestroyed(QObject *obj);
+
+protected slots:
+    /**
+     * @brief Unchecks the normalActionItem.
+     * Used as a triggered() callback by the fullScreenAction to make sure only one of it or the
+     * normalAction are checked at a time, as they're mutually exclusive.
+     */
+    void fullScreenActionItemCallback(bool);
+    /**
+     * @brief Unchecks the fullScreenActionItem.
+     * Used as a triggered() callback by the normalAction to make sure only one of it or the
+     * fullScreenAction are checked at a time, as they're mutually exclusive.
+     */
+    void normalActionItemCallback(bool);
+    /**
+     * @brief Enable/Disable Status Bar
+     */
+    void showStatusBarCallback(bool checked);
+
 signals:
-    void initStatusChanged(const QString& message);
+    void initStatusChanged(const QString& message, int alignment, const QColor &color);
+    /** Emitted when any value changes from any source */
+    void valueChanged(const int uasId, const QString& name, const QString& unit, const QVariant& value, const quint64 msec);
+    /** Emitted when any the Canvas elements within QML wudgets need updating */
+    void repaintCanvas();
+
+#ifdef QGC_MOUSE_ENABLED_LINUX
+    /** @brief Forward X11Event to catch 3DMouse inputs */
+    void x11EventOccured(XEvent *event);
+#endif //QGC_MOUSE_ENABLED_LINUX
 
 public:
     QGCMAVLinkLogPlayer* getLogPlayer()
@@ -236,137 +212,61 @@ public:
         return logPlayer;
     }
 
-    MAVLinkProtocol* getMAVLink()
-    {
-        return mavlink;
-    }
-
 protected:
-
-    MainWindow(QWidget *parent = 0);
 
     typedef enum _VIEW_SECTIONS
     {
-        VIEW_ENGINEER,
-        VIEW_OPERATOR,
-        VIEW_PILOT,
-        VIEW_MAVLINK,
-        VIEW_FIRMWAREUPDATE,
-        VIEW_UNCONNECTED,    ///< View in unconnected mode, when no UAS is available
-        VIEW_FULL            ///< All widgets shown at once
+        VIEW_ANALYZE,           // Engineering/Analyze view mode. Used for analyzing data and modifying onboard parameters
+        VIEW_PLAN,              // New (QtQuick) Mission/Map/Plan view mode. Used for setting mission waypoints and high-level system commands.
+        VIEW_FLIGHT,            // Flight/Fly/Operate view mode. Used for 1st-person observation of the vehicle.
+        VIEW_SIMULATION,        // HIL Simulation view. Useful overview of the entire system when doing hardware-in-the-loop simulations.
+        VIEW_SETUP,             // Setup view. Used for initializing the system for operation. Includes UI for calibration, firmware updating/checking, and parameter modifcation.
+        VIEW_UNUSED1,           // Unused (don't remove, or it will screw up saved settigns indices)
+        VIEW_UNUSED2,           // Unused (don't remove, or it will screw up saved settigns indices)
+        VIEW_EXPERIMENTAL_PLAN, // Original (Qt Widget) Mission/Map/Plan view mode. Used for setting mission waypoints and high-level system commands.
     } VIEW_SECTIONS;
-
-    /**
-     * @brief Adds an already instantiated QDockedWidget to the Tools Menu
-     *
-     * This function does all the hosekeeping to have a QDockedWidget added to the
-     * tools menu and connects the QMenuAction to a slot that shows the widget and
-     * checks/unchecks the tools menu item
-     *
-     * @param widget    The QDockWidget being added
-     * @param title     The entry that will appear in the Menu and in the QDockedWidget title bar
-     * @param location  The default location for the QDockedWidget in case there is no previous key in the settings
-     */
-    void addTool(QDockWidget* widget, const QString& title, Qt::DockWidgetArea location=Qt::RightDockWidgetArea);
-
-    /**
-     * @brief Adds an already instantiated QWidget to the center stack
-     *
-     * This function does all the hosekeeping to have a QWidget added to the tools menu
-     * tools menu and connects the QMenuAction to a slot that shows the widget and
-     * checks/unchecks the tools menu item. This is used for all the central widgets (those in
-     * the center stack.
-     *
-     * @param widget        The QWidget being added
-     * @param title         The entry that will appear in the Menu
-     */
-    void addCentralWidget(QWidget* widget, const QString& title);
 
     /** @brief Catch window resize events */
     void resizeEvent(QResizeEvent * event);
 
-    /** @brief Keeps track of the current view */
-    VIEW_SECTIONS currentView;
-    QGC_MAINWINDOW_STYLE currentStyle;
-    bool aboutToCloseFlag;
-    bool changingViewsFlag;
-
-    void storeViewState();
-    void loadViewState();
-
-    void buildCustomWidget();
-    void buildCommonWidgets();
-    void connectCommonWidgets();
     void connectCommonActions();
-	void connectSenseSoarActions();
 
     void loadSettings();
     void storeSettings();
 
-    // TODO Should be moved elsewhere, as the protocol does not belong to the UI
-    MAVLinkProtocol* mavlink;
-
-    MAVLinkSimulationLink* simulationLink;
-    LinkInterface* udpLink;
 
     QSettings settings;
-    QStackedWidget *centerStack;
-    QActionGroup* centerStackActionGroup;
 
     // Center widgets
     QPointer<Linecharts> linechartWidget;
-    QPointer<HUD> hudWidget;
-    QPointer<QGCVehicleConfig> configWidget;
-    QPointer<QGCMapTool> mapWidget;
-    QPointer<XMLCommProtocolWidget> protocolWidget;
-    QPointer<QGCDataPlot2D> dataplotWidget;
 #ifdef QGC_OSG_ENABLED
-    QPointer<QWidget> _3DWidget;
-#endif
-#if (defined _MSC_VER) || (defined Q_OS_MAC)
-    QPointer<QGCGoogleEarthView> gEarthWidget;
+    QPointer<QWidget> q3DWidget;
 #endif
     QPointer<QGCFirmwareUpdate> firmwareUpdateWidget;
 
-    // Dock widgets
-    QPointer<QDockWidget> controlDockWidget;
-    QPointer<QDockWidget> controlParameterWidget;
-    QPointer<QDockWidget> infoDockWidget;
-    QPointer<QDockWidget> cameraDockWidget;
-    QPointer<QDockWidget> listDockWidget;
-    QPointer<QDockWidget> waypointsDockWidget;
-    QPointer<QDockWidget> detectionDockWidget;
-    QPointer<QDockWidget> debugConsoleDockWidget;
-    QPointer<QDockWidget> parametersDockWidget;
-    QPointer<QDockWidget> headDown1DockWidget;
-    QPointer<QDockWidget> headDown2DockWidget;
-    QPointer<QDockWidget> watchdogControlDockWidget;
-
-    QPointer<QDockWidget> headUpDockWidget;
-    QPointer<QDockWidget> video1DockWidget;
-    QPointer<QDockWidget> video2DockWidget;
-    QPointer<QDockWidget> rgbd1DockWidget;
-    QPointer<QDockWidget> rgbd2DockWidget;
-    QPointer<QDockWidget> logPlayerDockWidget;
-
-    QPointer<QDockWidget> hsiDockWidget;
-    QPointer<QDockWidget> rcViewDockWidget;
-    QPointer<QDockWidget> hudDockWidget;
-    QPointer<QDockWidget> slugsDataWidget;
-    QPointer<QDockWidget> slugsHilSimWidget;
-    QPointer<QDockWidget> slugsCamControlWidget;
-
-    QPointer<QGCToolBar> toolBar;
-
+    QPointer<MainToolBar> _mainToolBar;
     QPointer<QDockWidget> mavlinkInspectorWidget;
     QPointer<MAVLinkDecoder> mavlinkDecoder;
     QPointer<QDockWidget> mavlinkSenderWidget;
     QGCMAVLinkLogPlayer* logPlayer;
 
-    // Popup widgets
-    JoystickWidget* joystickWidget;
+    QPointer<QGCUASFileViewMulti> fileWidget;
 
-    JoystickInput* joystick;
+#ifndef __mobile__
+    JoystickInput* joystick; ///< The joystick manager for QGC
+#endif
+
+#ifdef QGC_MOUSE_ENABLED_WIN
+    /** @brief 3d Mouse support (WIN only) */
+    Mouse3DInput* mouseInput;               ///< 3dConnexion 3dMouse SDK
+    Mouse6dofInput* mouse;                  ///< Implementation for 3dMouse input
+#endif // QGC_MOUSE_ENABLED_WIN
+
+#ifdef QGC_MOUSE_ENABLED_LINUX
+    /** @brief Reimplementation of X11Event to handle 3dMouse Events (magellan) */
+    bool x11Event(XEvent *event);
+    Mouse6dofInput* mouse;                  ///< Implementation for 3dMouse input
+#endif // QGC_MOUSE_ENABLED_LINUX
 
     /** User interface actions **/
     QAction* connectUASAct;
@@ -375,24 +275,90 @@ protected:
     QAction* returnUASAct;
     QAction* stopUASAct;
     QAction* killUASAct;
-    QAction* simulateUASAct;
 
 
     LogCompressor* comp;
-    QString screenFileName;
     QTimer* videoTimer;
-    QString styleFileName;
-    bool autoReconnect;
-    Qt::WindowStates windowStateVal;
-    bool lowPowerMode; ///< If enabled, QGC reduces the update rates of all widgets
-    QGCFlightGearLink* fgLink;
     QTimer windowNameUpdateTimer;
 
+private slots:
+    void _showDockWidgetAction(bool show);
+    void _linkStateChange(LinkInterface*);
+#ifdef UNITTEST_BUILD
+    void _showQmlTestWidget(void);
+#endif
+    
 private:
-    Ui::MainWindow ui;
+    /// Constructor is private since all creation should be through MainWindow::_create
+    MainWindow(QSplashScreen* splashScreen);
 
-    QString getWindowStateKey();
-    QString getWindowGeometryKey();
+    void _openUrl(const QString& url, const QString& errorMessage);
+
+    // Center widgets
+    QPointer<QWidget> _planView;
+    QPointer<QWidget> _experimentalPlanView;
+    QPointer<QWidget> _flightView;
+    QPointer<QWidget> _setupView;
+    QPointer<QWidget> _analyzeView;
+    QPointer<QWidget> _simView;
+    QPointer<QWidget> _terminalView;
+
+    // Dock widget names
+    static const char* _uasControlDockWidgetName;
+    static const char* _uasListDockWidgetName;
+    static const char* _waypointsDockWidgetName;
+    static const char* _mavlinkDockWidgetName;
+    static const char* _parametersDockWidgetName;
+    static const char* _customCommandWidgetName;
+    static const char* _filesDockWidgetName;
+    static const char* _uasStatusDetailsDockWidgetName;
+    static const char* _mapViewDockWidgetName;
+    static const char* _hsiDockWidgetName;
+    static const char* _hdd1DockWidgetName;
+    static const char* _hdd2DockWidgetName;
+    static const char* _pfdDockWidgetName;
+    static const char* _hudDockWidgetName;
+    static const char* _uasInfoViewDockWidgetName;
+
+    QMap<QString, QDockWidget*>     _mapName2DockWidget;
+    QMap<int, QDockWidget*>         _mapUasId2HilDockWidget;
+    QMap<QDockWidget*, QAction*>    _mapDockWidget2Action;
+
+    void _buildPlanView(void);
+    void _buildExperimentalPlanView(void);
+    void _buildFlightView(void);
+    void _buildSetupView(void);
+    void _buildAnalyzeView(void);
+    void _buildSimView(void);
+    void _buildTerminalView(void);
+
+    void _storeCurrentViewState(void);
+    void _loadCurrentViewState(void);
+
+    void _createDockWidget(const QString& title, const QString& name, Qt::DockWidgetArea area, QWidget* innerWidget);
+    void _createInnerDockWidget(const QString& widgetName);
+    void _buildCommonWidgets(void);
+    void _hideAllHilDockWidgets(void);
+    void _hideAllDockWidgets(void);
+    void _showDockWidget(const QString &name, bool show);
+#ifndef __mobile__
+    void _showHILConfigurationWidgets(void);
+#endif
+
+    bool                    _autoReconnect;
+    bool                    _lowPowerMode;           ///< If enabled, QGC reduces the update rates of all widgets
+    bool                    _showStatusBar;
+    QActionGroup*           _centerStackActionGroup;
+    QVBoxLayout*            _centralLayout;
+    QList<QObject*>         _commsWidgetList;
+    QWidget*                _currentViewWidget;     ///< Currently displayed view widget
+    QSplashScreen*          _splashScreen;          ///< Splash screen, NULL is splash screen not currently being shown
+    VIEW_SECTIONS           _currentView;           ///< Currently displayed view
+    Ui::MainWindow          _ui;
+    QString                 _screenFileName;
+
+    QString _getWindowStateKey();
+    QString _getWindowGeometryKey();
 
 };
 

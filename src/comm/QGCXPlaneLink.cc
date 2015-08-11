@@ -38,7 +38,8 @@ This file is part of the QGROUNDCONTROL project
 #include "QGC.h"
 #include <QHostInfo>
 #include "UAS.h"
-#include "MainWindow.h"
+#include "UASInterface.h"
+#include "QGCMessageBox.h"
 
 QGCXPlaneLink::QGCXPlaneLink(UASInterface* mav, QString remoteHost, QHostAddress localHost, quint16 localPort) :
     mav(mav),
@@ -47,13 +48,28 @@ QGCXPlaneLink::QGCXPlaneLink(UASInterface* mav, QString remoteHost, QHostAddress
     socket(NULL),
     process(NULL),
     terraSync(NULL),
+    barometerOffsetkPa(-8.0f),
     airframeID(QGCXPlaneLink::AIRFRAME_UNKNOWN),
     xPlaneConnected(false),
-    xPlaneVersion(0)
+    xPlaneVersion(0),
+    simUpdateLast(QGC::groundTimeMilliseconds()),
+    simUpdateFirst(0),
+    simUpdateLastText(QGC::groundTimeMilliseconds()),
+    simUpdateLastGroundTruth(QGC::groundTimeMilliseconds()),
+    simUpdateHz(0),
+    _sensorHilEnabled(true),
+    _should_exit(false)
 {
+    // We're doing it wrong - because the Qt folks got the API wrong:
+    // http://blog.qt.digia.com/blog/2010/06/17/youre-doing-it-wrong/
+    moveToThread(this);
+
+    setTerminationEnabled(false);
+
     this->localHost = localHost;
     this->localPort = localPort/*+mav->getUASID()*/;
-    this->connectState = false;
+    connectState = false;
+
     this->name = tr("X-Plane Link (localPort:%1)").arg(localPort);
     setRemoteHost(remoteHost);
     loadSettings();
@@ -62,20 +78,25 @@ QGCXPlaneLink::QGCXPlaneLink(UASInterface* mav, QString remoteHost, QHostAddress
 QGCXPlaneLink::~QGCXPlaneLink()
 {
     storeSettings();
-//    if(connectState) {
-//       disconnectSimulation();
-//    }
+    // Tell the thread to exit
+    _should_exit = true;
+
+    if (socket) {
+        socket->close();
+        socket->deleteLater();
+        socket = NULL;
+    }
 }
 
 void QGCXPlaneLink::loadSettings()
 {
     // Load defaults from settings
     QSettings settings;
-    settings.sync();
     settings.beginGroup("QGC_XPLANE_LINK");
     setRemoteHost(settings.value("REMOTE_HOST", QString("%1:%2").arg(remoteHost.toString()).arg(remotePort)).toString());
     setVersion(settings.value("XPLANE_VERSION", 10).toInt());
-    selectPlane(settings.value("AIRFRAME", "default").toString());
+    selectAirframe(settings.value("AIRFRAME", "default").toString());
+    _sensorHilEnabled = settings.value("SENSOR_HIL", _sensorHilEnabled).toBool();
     settings.endGroup();
 }
 
@@ -87,8 +108,8 @@ void QGCXPlaneLink::storeSettings()
     settings.setValue("REMOTE_HOST", QString("%1:%2").arg(remoteHost.toString()).arg(remotePort));
     settings.setValue("XPLANE_VERSION", xPlaneVersion);
     settings.setValue("AIRFRAME", airframeName);
+    settings.setValue("SENSOR_HIL", _sensorHilEnabled);
     settings.endGroup();
-    settings.sync();
 }
 
 void QGCXPlaneLink::setVersion(const QString& version)
@@ -131,7 +152,121 @@ void QGCXPlaneLink::setVersion(unsigned int version)
  **/
 void QGCXPlaneLink::run()
 {
-    exec();
+    if (!mav) {
+        emit statusMessage("No MAV present");
+        return;
+    }
+
+    if (connectState) {
+        emit statusMessage("Already connected");
+        return;
+    }
+
+    socket = new QUdpSocket(this);
+    socket->moveToThread(this);
+    connectState = socket->bind(localHost, localPort, QAbstractSocket::ReuseAddressHint);
+    if (!connectState) {
+
+        emit statusMessage("Binding socket failed!");
+
+        socket->deleteLater();
+        socket = NULL;
+        return;
+    }
+
+    emit statusMessage(tr("Waiting for XPlane.."));
+
+    QObject::connect(socket, SIGNAL(readyRead()), this, SLOT(readBytes()));
+
+    UAS* uas = dynamic_cast<UAS*>(mav);
+    if (uas)
+    {
+        connect(uas, SIGNAL(hilControlsChanged(quint64, float, float, float, float, quint8, quint8)), this, SLOT(updateControls(quint64,float,float,float,float,quint8,quint8)), Qt::QueuedConnection);
+        connect(uas, SIGNAL(hilActuatorsChanged(quint64, float, float, float, float, float, float, float, float)), this, SLOT(updateActuators(quint64,float,float,float,float,float,float,float,float)), Qt::QueuedConnection);
+
+        connect(this, SIGNAL(hilGroundTruthChanged(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), uas, SLOT(sendHilGroundTruth(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), Qt::QueuedConnection);
+        connect(this, SIGNAL(hilStateChanged(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), uas, SLOT(sendHilState(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), Qt::QueuedConnection);
+        connect(this, SIGNAL(sensorHilGpsChanged(quint64,double,double,double,int,float,float,float,float,float,float,float,int)), uas, SLOT(sendHilGps(quint64,double,double,double,int,float,float,float,float,float,float,float,int)), Qt::QueuedConnection);
+        connect(this, SIGNAL(sensorHilRawImuChanged(quint64,float,float,float,float,float,float,float,float,float,float,float,float,float,quint32)), uas, SLOT(sendHilSensors(quint64,float,float,float,float,float,float,float,float,float,float,float,float,float,quint32)), Qt::QueuedConnection);
+
+        uas->startHil();
+    } else {
+        emit statusMessage(tr("Failed to connect to drone instance"));
+        return;
+    }
+
+#pragma pack(push, 1)
+    struct iset_struct
+    {
+        char b[5];
+        int index; // (0->20 in the lsit below)
+        char str_ipad_them[16];
+        char str_port_them[6];
+        char padding[2];
+        int use_ip;
+    } ip; // to use this option, 0 not to.
+#pragma pack(pop)
+
+    ip.b[0] = 'I';
+    ip.b[1] = 'S';
+    ip.b[2] = 'E';
+    ip.b[3] = 'T';
+    ip.b[4] = '0';
+
+    QList<QHostAddress> hostAddresses = QNetworkInterface::allAddresses();
+
+    QString localAddrStr;
+    QString localPortStr = QString("%1").arg(localPort);
+
+    for (int i = 0; i < hostAddresses.size(); i++)
+    {
+        // Exclude loopback IPv4 and all IPv6 addresses
+        if (hostAddresses.at(i) != QHostAddress("127.0.0.1") && !hostAddresses.at(i).toString().contains(":"))
+        {
+            localAddrStr = hostAddresses.at(i).toString();
+            break;
+        }
+    }
+
+    ip.index = 0;
+    strncpy(ip.str_ipad_them, localAddrStr.toLatin1(), qMin((int)sizeof(ip.str_ipad_them), 16));
+    strncpy(ip.str_port_them, localPortStr.toLatin1(), qMin((int)sizeof(ip.str_port_them), 6));
+    ip.use_ip = 1;
+
+    writeBytes((const char*)&ip, sizeof(ip));
+
+    _should_exit = false;
+
+    while(!_should_exit) {
+        QCoreApplication::processEvents();
+        QGC::SLEEP::msleep(5);
+    }
+
+    uas = dynamic_cast<UAS*>(mav);
+    if (uas)
+    {
+        disconnect(uas, SIGNAL(hilControlsChanged(quint64, float, float, float, float, quint8, quint8)), this, SLOT(updateControls(quint64,float,float,float,float,quint8,quint8)));
+        disconnect(uas, SIGNAL(hilActuatorsChanged(quint64, float, float, float, float, float, float, float, float)), this, SLOT(updateActuators(quint64,float,float,float,float,float,float,float,float)));
+
+        disconnect(this, SIGNAL(hilGroundTruthChanged(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), uas, SLOT(sendHilGroundTruth(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)));
+        disconnect(this, SIGNAL(hilStateChanged(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)), uas, SLOT(sendHilState(quint64,float,float,float,float,float,float,double,double,double,float,float,float,float,float,float,float,float)));
+        disconnect(this, SIGNAL(sensorHilGpsChanged(quint64,double,double,double,int,float,float,float,float,float,float,float,int)), uas, SLOT(sendHilGps(quint64,double,double,double,int,float,float,float,float,float,float,float,int)));
+        disconnect(this, SIGNAL(sensorHilRawImuChanged(quint64,float,float,float,float,float,float,float,float,float,float,float,float,float,quint32)), uas, SLOT(sendHilSensors(quint64,float,float,float,float,float,float,float,float,float,float,float,float,float,quint32)));
+
+        // Do not toggle HIL state on the UAS - this is not the job of this link, but of the
+        // UAS object
+    }
+
+    connectState = false;
+
+    QObject::disconnect(socket, SIGNAL(readyRead()), this, SLOT(readBytes()));
+
+    socket->close();
+    socket->deleteLater();
+    socket = NULL;
+
+    emit simulationDisconnected();
+    emit simulationConnected(false);
 }
 
 void QGCXPlaneLink::setPort(int localPort)
@@ -143,28 +278,34 @@ void QGCXPlaneLink::setPort(int localPort)
 
 void QGCXPlaneLink::processError(QProcess::ProcessError err)
 {
-    switch(err)
-    {
-    case QProcess::FailedToStart:
-        MainWindow::instance()->showCriticalMessage(tr("X-Plane Failed to Start"), tr("Please check if the path and command is correct"));
-        break;
-    case QProcess::Crashed:
-        MainWindow::instance()->showCriticalMessage(tr("X-Plane Crashed"), tr("This is a X-Plane-related problem. Please upgrade X-Plane"));
-        break;
-    case QProcess::Timedout:
-        MainWindow::instance()->showCriticalMessage(tr("X-Plane Start Timed Out"), tr("Please check if the path and command is correct"));
-        break;
-    case QProcess::WriteError:
-        MainWindow::instance()->showCriticalMessage(tr("Could not Communicate with X-Plane"), tr("Please check if the path and command is correct"));
-        break;
-    case QProcess::ReadError:
-        MainWindow::instance()->showCriticalMessage(tr("Could not Communicate with X-Plane"), tr("Please check if the path and command is correct"));
-        break;
-    case QProcess::UnknownError:
-    default:
-        MainWindow::instance()->showCriticalMessage(tr("X-Plane Error"), tr("Please check if the path and command is correct."));
-        break;
+    QString msg;
+    
+    switch(err) {
+        case QProcess::FailedToStart:
+            msg = tr("X-Plane Failed to start. Please check if the path and command is correct");
+            break;
+            
+        case QProcess::Crashed:
+            msg = tr("X-Plane crashed. This is an X-Plane-related problem, check for X-Plane upgrade.");
+            break;
+            
+        case QProcess::Timedout:
+            msg = tr("X-Plane start timed out. Please check if the path and command is correct");
+            break;
+            
+        case QProcess::ReadError:
+        case QProcess::WriteError:
+            msg = tr("Could not communicate with X-Plane. Please check if the path and command are correct");
+            break;
+            
+        case QProcess::UnknownError:
+        default:
+            msg = tr("X-Plane error occurred. Please check if the path and command is correct.");
+            break;
     }
+    
+    
+    QGCMessageBox::critical(tr("X-Plane HIL"), msg);
 }
 
 QString QGCXPlaneLink::getRemoteHost()
@@ -182,7 +323,6 @@ void QGCXPlaneLink::setRemoteHost(const QString& newHost)
 
     if (newHost.contains(":"))
     {
-        //qDebug() << "HOST: " << newHost.split(":").first();
         QHostInfo info = QHostInfo::fromName(newHost.split(":").first());
         if (info.error() == QHostInfo::NoError)
         {
@@ -198,7 +338,6 @@ void QGCXPlaneLink::setRemoteHost(const QString& newHost)
                 }
             }
             remoteHost = address;
-            //qDebug() << "Address:" << address.toString();
             // Set localPort according to user input
             remotePort = newHost.split(":").last().toInt();
         }
@@ -223,12 +362,10 @@ void QGCXPlaneLink::setRemoteHost(const QString& newHost)
     emit remoteChanged(QString("%1:%2").arg(remoteHost.toString()).arg(remotePort));
 }
 
-void QGCXPlaneLink::updateActuators(uint64_t time, float act1, float act2, float act3, float act4, float act5, float act6, float act7, float act8)
+void QGCXPlaneLink::updateActuators(quint64 time, float act1, float act2, float act3, float act4, float act5, float act6, float act7, float act8)
 {
+    if (mav->getSystemType() == MAV_TYPE_QUADROTOR)
     // Only update this for multirotors
-    if (airframeID == AIRFRAME_QUAD_X_MK_10INCH_I2C ||
-        airframeID == AIRFRAME_QUAD_X_ARDRONE ||
-        airframeID == AIRFRAME_QUAD_DJI_F450_PWM)
     {
 
         Q_UNUSED(time);
@@ -254,44 +391,41 @@ void QGCXPlaneLink::updateActuators(uint64_t time, float act1, float act2, float
         p.index = 25;
         memset(p.f, 0, sizeof(p.f));
 
-        if (airframeID == AIRFRAME_QUAD_X_MK_10INCH_I2C)
-        {
-            p.f[0] = act1 / 255.0f;
-            p.f[1] = act2 / 255.0f;
-            p.f[2] = act3 / 255.0f;
-            p.f[3] = act4 / 255.0f;
-        }
-        else if (airframeID == AIRFRAME_QUAD_X_ARDRONE)
-        {
-            p.f[0] = act1 / 500.0f;
-            p.f[1] = act2 / 500.0f;
-            p.f[2] = act3 / 500.0f;
-            p.f[3] = act4 / 500.0f;
-        }
-        else
-        {
-            p.f[0] = (act1 - 1000.0f) / 1000.0f;
-            p.f[1] = (act2 - 1000.0f) / 1000.0f;
-            p.f[2] = (act3 - 1000.0f) / 1000.0f;
-            p.f[3] = (act4 - 1000.0f) / 1000.0f;
-        }
+        p.f[0] = act1;
+        p.f[1] = act2;
+        p.f[2] = act3;
+        p.f[3] = act4;
+
+        // XXX the system corrects for the scale onboard, do not scale again
+
+//        if (airframeID == AIRFRAME_QUAD_X_MK_10INCH_I2C)
+//        {
+//            p.f[0] = act1 / 255.0f;
+//            p.f[1] = act2 / 255.0f;
+//            p.f[2] = act3 / 255.0f;
+//            p.f[3] = act4 / 255.0f;
+//        }
+//        else if (airframeID == AIRFRAME_QUAD_X_ARDRONE)
+//        {
+//            p.f[0] = act1 / 500.0f;
+//            p.f[1] = act2 / 500.0f;
+//            p.f[2] = act3 / 500.0f;
+//            p.f[3] = act4 / 500.0f;
+//        }
+//        else
+//        {
+//            p.f[0] = (act1 - 1000.0f) / 1000.0f;
+//            p.f[1] = (act2 - 1000.0f) / 1000.0f;
+//            p.f[2] = (act3 - 1000.0f) / 1000.0f;
+//            p.f[3] = (act4 - 1000.0f) / 1000.0f;
+//        }
         // Throttle
         writeBytes((const char*)&p, sizeof(p));
     }
 }
 
-void QGCXPlaneLink::updateControls(uint64_t time, float rollAilerons, float pitchElevator, float yawRudder, float throttle, uint8_t systemMode, uint8_t navMode)
+void QGCXPlaneLink::updateControls(quint64 time, float rollAilerons, float pitchElevator, float yawRudder, float throttle, quint8 systemMode, quint8 navMode)
 {
-    // Do not update this control type for
-    // all multirotors
-
-    if (airframeID == AIRFRAME_QUAD_X_MK_10INCH_I2C ||
-        airframeID == AIRFRAME_QUAD_X_ARDRONE ||
-        airframeID == AIRFRAME_QUAD_DJI_F450_PWM)
-    {
-        return;
-    }
-
     #pragma pack(push, 1)
     struct payload {
         char b[5];
@@ -306,81 +440,133 @@ void QGCXPlaneLink::updateControls(uint64_t time, float rollAilerons, float pitc
     p.b[3] = 'A';
     p.b[4] = '\0';
 
-    p.index = 12;
-    p.f[0] = pitchElevator;
-    p.f[1] = rollAilerons;
-    p.f[2] = yawRudder;
-
     Q_UNUSED(time);
     Q_UNUSED(systemMode);
     Q_UNUSED(navMode);
 
-    // Ail / Elevon / Rudder
-    writeBytes((const char*)&p, sizeof(p));
-    p.index = 8;
-    writeBytes((const char*)&p, sizeof(p));
+    bool isFixedWing = true;
 
-    p.index = 25;
-    memset(p.f, 0, sizeof(p.f));
-    p.f[0] = throttle;
-    p.f[1] = throttle;
-    p.f[2] = throttle;
-    p.f[3] = throttle;
-    // Throttle
-    writeBytes((const char*)&p, sizeof(p));
+    if (mav->getAirframe() == UASInterface::QGC_AIRFRAME_X8 ||
+            mav->getAirframe() == UASInterface::QGC_AIRFRAME_VIPER_2_0 ||
+            mav->getAirframe() == UASInterface::QGC_AIRFRAME_CAMFLYER_Q)
+    {
+        // de-mix delta-mixed inputs
+        // pitch input - mixed roll and pitch channels
+        p.f[0] = 0.5f * (rollAilerons - pitchElevator);
+        // roll input - mixed roll and pitch channels
+        p.f[1] = 0.5f * (rollAilerons + pitchElevator);
+        // yaw
+        p.f[2] = 0.0f;
+    }
+    else if (mav->getSystemType() == MAV_TYPE_QUADROTOR)
+    {
+        qDebug() << "MAV_TYPE_QUADROTOR";
+
+        // Individual effort will be provided directly to the actuators on Xplane quadrotor.
+        p.f[0] = yawRudder;
+        p.f[1] = rollAilerons;
+        p.f[2] = throttle;
+        p.f[3] = pitchElevator;
+
+        isFixedWing = false;
+    }
+    else
+    {
+        // direct pass-through, normal fixed-wing.
+        p.f[0] = -pitchElevator;
+        p.f[1] = rollAilerons;
+        p.f[2] = yawRudder;
+    }
+
+    if(isFixedWing)
+    {
+        // Ail / Elevon / Rudder
+        p.index = 12;   // XPlane, wing sweep
+        writeBytes((const char*)&p, sizeof(p));
+
+        p.index = 8;    // XPlane, joystick? why?
+        writeBytes((const char*)&p, sizeof(p));
+
+        p.index = 25;   // Thrust
+        memset(p.f, 0, sizeof(p.f));
+        p.f[0] = throttle;
+        p.f[1] = throttle;
+        p.f[2] = throttle;
+        p.f[3] = throttle;
+
+        // Throttle
+        writeBytes((const char*)&p, sizeof(p));
+    }
+    else
+    {
+        qDebug() << "Transmitting p.index = 25";
+        p.index = 25;   // XPlane, throttle command.
+        writeBytes((const char*)&p, sizeof(p));
+    }
+
+}
+
+Eigen::Matrix3f euler_to_wRo(double yaw, double pitch, double roll) {
+  double c__ = cos(yaw);
+  double _c_ = cos(pitch);
+  double __c = cos(roll);
+  double s__ = sin(yaw);
+  double _s_ = sin(pitch);
+  double __s = sin(roll);
+  double cc_ = c__ * _c_;
+  double cs_ = c__ * _s_;
+  double sc_ = s__ * _c_;
+  double ss_ = s__ * _s_;
+  double c_c = c__ * __c;
+  double c_s = c__ * __s;
+  double s_c = s__ * __c;
+  double s_s = s__ * __s;
+  double _cc = _c_ * __c;
+  double _cs = _c_ * __s;
+  double csc = cs_ * __c;
+  double css = cs_ * __s;
+  double ssc = ss_ * __c;
+  double sss = ss_ * __s;
+  Eigen::Matrix3f wRo;
+  wRo <<
+    cc_  , css-s_c,  csc+s_s,
+    sc_  , sss+c_c,  ssc-c_s,
+    -_s_  ,     _cs,      _cc;
+  return wRo;
 }
 
 void QGCXPlaneLink::writeBytes(const char* data, qint64 size)
 {
     if (!data) return;
-    //#define QGCXPlaneLink_DEBUG
-#if 1
-    QString bytes;
-    QString ascii;
-    for (int i=0; i<size; i++)
+
+    // If socket exists and is connected, transmit the data
+    if (socket && connectState)
     {
-        unsigned char v = data[i];
-        bytes.append(QString().sprintf("%02x ", v));
-        if (data[i] > 31 && data[i] < 127)
-        {
-            ascii.append(data[i]);
-        }
-        else
-        {
-            ascii.append(219);
-        }
+        socket->writeDatagram(data, size, remoteHost, remotePort);
     }
-    //qDebug() << "Sent" << size << "bytes to" << remoteHost.toString() << ":" << remotePort << "data:";
-    //qDebug() << bytes;
-    //qDebug() << "ASCII:" << ascii;
-#endif
-    if (connectState && socket) socket->writeDatagram(data, size, remoteHost, remotePort);
 }
 
 /**
- * @brief Read a number of bytes from the interface.
- *
- * @param data Pointer to the data byte array to write the bytes to
- * @param maxLength The maximum number of bytes to write
+ * @brief Read all pending packets from the interface.
  **/
 void QGCXPlaneLink::readBytes()
 {
     // Only emit updates on attitude message
     bool emitUpdate = false;
+    quint16 fields_changed = 0;
 
-    const qint64 maxLength = 65536;
+    const qint64 maxLength = 1000;
     char data[maxLength];
     QHostAddress sender;
     quint16 senderPort;
 
     unsigned int s = socket->pendingDatagramSize();
-    if (s > maxLength) std::cerr << __FILE__ << __LINE__ << " UDP datagram overflow, allowed to read less bytes than datagram size" << std::endl;
+    if (s > maxLength) std::cerr << __FILE__ << __LINE__ << " UDP datagram overflow, allowed to read less bytes than datagram size: " << s << std::endl;
     socket->readDatagram(data, maxLength, &sender, &senderPort);
-
-    QByteArray b(data, s);
-
-    /*// Print string
-    QString state(b)*/;
+    if (s > maxLength) {
+    	std::string headStr = std::string(data, data+5);
+    	std::cerr << __FILE__ << __LINE__ << " UDP datagram header: " << headStr << std::endl;
+    }
 
     // Calculate the number of data segments a 36 bytes
     // XPlane always has 5 bytes header: 'DATA@'
@@ -404,6 +590,10 @@ void QGCXPlaneLink::readBytes()
     {
         xPlaneConnected = true;
 
+        if (oldConnectionState != xPlaneConnected) {
+            simUpdateFirst = QGC::groundTimeMilliseconds();
+        }
+
         for (unsigned i = 0; i < nsegs; i++)
         {
             // Get index
@@ -412,10 +602,51 @@ void QGCXPlaneLink::readBytes()
 
             if (p.index == 3)
             {
-                airspeed = p.f[6] * 0.44704f;
+                ind_airspeed = p.f[5] * 0.44704f;
+                true_airspeed = p.f[6] * 0.44704f;
                 groundspeed = p.f[7] * 0.44704;
 
                 //qDebug() << "SPEEDS:" << "airspeed" << airspeed << "m/s, groundspeed" << groundspeed << "m/s";
+            }
+            if (p.index == 4)
+            {
+				// WORKAROUND: IF ground speed <<1m/s and altitude-above-ground <1m, do NOT use the X-Plane data, because X-Plane (tested 
+				// with v10.3 and earlier) delivers yacc=0 and zacc=0 when the ground speed is very low, which gives e.g. wrong readings 
+				// before launch when waiting on the runway. This might pose a problem for initial state estimation/calibration. 
+				// Instead, we calculate our own accelerations.
+				if (fabsf(groundspeed)<0.1f && alt_agl<1.0) 
+				{
+					// TODO: Add centrip. acceleration to the current static acceleration implementation.
+					Eigen::Vector3f g(0, 0, -9.81f);
+					Eigen::Matrix3f R = euler_to_wRo(yaw, pitch, roll);
+					Eigen::Vector3f gr = R.transpose().eval() * g;
+
+					xacc = gr[0];
+					yacc = gr[1];
+					zacc = gr[2];
+
+					//qDebug() << "Calculated values" << gr[0] << gr[1] << gr[2];
+				}
+				else
+				{
+					// Accelerometer readings, directly from X-Plane and including centripetal forces. 
+					const float one_g = 9.80665f;
+					xacc = p.f[5] * one_g;
+					yacc = p.f[6] * one_g;
+					zacc = -p.f[4] * one_g;
+
+					//qDebug() << "X-Plane values" << xacc << yacc << zacc;
+				}
+
+				fields_changed |= (1 << 0) | (1 << 1) | (1 << 2);
+            }
+            // atmospheric pressure aircraft for XPlane 9 and 10
+            else if (p.index == 6)
+            {
+                // inHg to hPa (hecto Pascal / millibar)
+                abs_pressure = p.f[0] * 33.863886666718317f;
+                temperature = p.f[1];
+                fields_changed |= (1 << 9) | (1 << 12);
             }
             // Forward controls from X-Plane to MAV, not very useful
             // better: Connect Joystick to QGroundControl
@@ -428,12 +659,13 @@ void QGCXPlaneLink::readBytes()
 //                UAS* uas = dynamic_cast<UAS*>(mav);
 //                if (uas) uas->setManualControlCommands(man_roll, man_pitch, man_yaw, 0.6);
 //            }
-            else if (xPlaneVersion == 10 && p.index == 16)
+            else if ((xPlaneVersion == 10 && p.index == 16) || (xPlaneVersion == 9 && p.index == 17))
             {
-                //qDebug() << "ANG VEL:" << p.f[0] << p.f[3] << p.f[7];
-                rollspeed = p.f[2];
-                pitchspeed = p.f[1];
-                yawspeed = p.f[0];
+                // Cross checked with XPlane flight
+                pitchspeed = p.f[0];
+                rollspeed = p.f[1];
+                yawspeed = p.f[2];
+                fields_changed |= (1 << 3) | (1 << 4) | (1 << 5);
             }
             else if ((xPlaneVersion == 10 && p.index == 17) || (xPlaneVersion == 9 && p.index == 18))
             {
@@ -441,25 +673,92 @@ void QGCXPlaneLink::readBytes()
                 pitch = p.f[0] / 180.0f * M_PI;
                 roll = p.f[1] / 180.0f * M_PI;
                 yaw = p.f[2] / 180.0f * M_PI;
+
+                // X-Plane expresses yaw as 0..2 PI
+                if (yaw > M_PI) {
+                    yaw -= 2.0f * static_cast<float>(M_PI);
+                }
+                if (yaw < -M_PI) {
+                    yaw += 2.0f * static_cast<float>(M_PI);
+                }
+
+                float yawmag = p.f[3] / 180.0f * M_PI;
+
+                if (yawmag > M_PI) {
+                    yawmag -= 2.0f * static_cast<float>(M_PI);
+                }
+                if (yawmag < -M_PI) {
+                    yawmag += 2.0f * static_cast<float>(M_PI);
+                }
+
+                // Normal rotation matrix, but since we rotate the
+                // vector [0.25 0 0.45]', we end up with these relevant
+                // matrix parts.
+
+                xmag = cos(-yawmag) * 0.25f;
+                ymag = sin(-yawmag) * 0.25f;
+                zmag = 0.45f;
+                fields_changed |= (1 << 6) | (1 << 7) | (1 << 8);
+
+                double cosPhi = cos(roll);
+                double sinPhi = sin(roll);
+                double cosThe = cos(pitch);
+                double sinThe = sin(pitch);
+                double cosPsi = cos(0.0);
+                double sinPsi = sin(0.0);
+
+                float dcm[3][3];
+
+                dcm[0][0] = cosThe * cosPsi;
+                dcm[0][1] = -cosPhi * sinPsi + sinPhi * sinThe * cosPsi;
+                dcm[0][2] = sinPhi * sinPsi + cosPhi * sinThe * cosPsi;
+
+                dcm[1][0] = cosThe * sinPsi;
+                dcm[1][1] = cosPhi * cosPsi + sinPhi * sinThe * sinPsi;
+                dcm[1][2] = -sinPhi * cosPsi + cosPhi * sinThe * sinPsi;
+
+                dcm[2][0] = -sinThe;
+                dcm[2][1] = sinPhi * cosThe;
+                dcm[2][2] = cosPhi * cosThe;
+
+                Eigen::Matrix3f m = Eigen::Map<Eigen::Matrix3f>((float*)dcm).eval();
+
+                Eigen::Vector3f mag(xmag, ymag, zmag);
+
+                Eigen::Vector3f magbody = m * mag;
+
+//                qDebug() << "yaw mag:" << p.f[2] << "x" << xmag << "y" << ymag;
+//                qDebug() << "yaw mag in body:" << magbody(0) << magbody(1) << magbody(2);
+
+                xmag = magbody(0);
+                ymag = magbody(1);
+                zmag = magbody(2);
+
+                // Rotate the measurement vector into the body frame using roll and pitch
+
+
                 emitUpdate = true;
-            }
-            else if ((xPlaneVersion == 9 && p.index == 17))
-            {
-                rollspeed = p.f[2];
-                pitchspeed = p.f[1];
-                yawspeed = p.f[0];
             }
 
 //            else if (p.index == 19)
 //            {
 //                qDebug() << "ATT:" << p.f[0] << p.f[1] << p.f[2];
 //            }
-            else if (p.index == 20)
+			else if (p.index == 20)
+			{
+				//qDebug() << "LAT/LON/ALT:" << p.f[0] << p.f[1] << p.f[2];
+				lat = p.f[0];
+				lon = p.f[1];
+				alt = p.f[2] * 0.3048f; // convert feet (MSL) to meters
+				alt_agl = p.f[3] * 0.3048f; //convert feet (AGL) to meters
+            }
+            else if (p.index == 21)
             {
-                //qDebug() << "LAT/LON/ALT:" << p.f[0] << p.f[1] << p.f[2];
-                lat = p.f[0];
-                lon = p.f[1];
-                alt = p.f[2] * 0.3048f; // convert feet (MSL) to meters
+                vy = p.f[3];
+                vx = -p.f[5];
+                // moving 'up' in XPlane is positive, but its negative in NED
+                // for us.
+                vz = -p.f[4];
             }
             else if (p.index == 12)
             {
@@ -502,17 +801,86 @@ void QGCXPlaneLink::readBytes()
         qDebug() << "UNKNOWN PACKET:" << data;
     }
 
+    // Wait for 0.5s before actually using the data, so that all fields are filled
+    if (QGC::groundTimeMilliseconds() - simUpdateFirst < 500) {
+        return;
+    }
+
     // Send updated state
-    if (emitUpdate)
+    if (emitUpdate && (QGC::groundTimeMilliseconds() - simUpdateLast) > 3)
     {
-        emit hilStateChanged(QGC::groundTimeUsecs(), roll, pitch, yaw, rollspeed,
-                         pitchspeed, yawspeed, lat*1E7, lon*1E7, alt*1E3,
-                         vx, vy, vz, xacc*1000, yacc*1000, zacc*1000);
+        simUpdateHz = simUpdateHz * 0.9f + 0.1f * (1000.0f / (QGC::groundTimeMilliseconds() - simUpdateLast));
+        if (QGC::groundTimeMilliseconds() - simUpdateLastText > 2000) {
+            emit statusMessage(tr("Receiving from XPlane at %1 Hz").arg(static_cast<int>(simUpdateHz)));
+            // Reset lowpass with current value
+            simUpdateHz = (1000.0f / (QGC::groundTimeMilliseconds() - simUpdateLast));
+            // Set state
+            simUpdateLastText = QGC::groundTimeMilliseconds();
+        }
+
+        simUpdateLast = QGC::groundTimeMilliseconds();
+
+        if (_sensorHilEnabled)
+        {
+            diff_pressure = (ind_airspeed * ind_airspeed * 1.225f) / 2.0f;
+
+            /* tropospheric properties (0-11km) for standard atmosphere */
+            const double T1 = 15.0 + 273.15;	/* temperature at base height in Kelvin */
+            const double a  = -6.5 / 1000;	/* temperature gradient in degrees per metre */
+            const double g  = 9.80665;	/* gravity constant in m/s/s */
+            const double R  = 287.05;	/* ideal gas constant in J/kg/K */
+
+            /* current pressure at MSL in kPa */
+            double p1 = 1013.25 / 10.0;
+
+            /* measured pressure in hPa, plus offset to simulate weather effects / offsets */
+            double p = abs_pressure / 10.0 + barometerOffsetkPa;
+
+            /*
+             * Solve:
+             *
+             *     /        -(aR / g)     \
+             *    | (p / p1)          . T1 | - T1
+             *     \                      /
+             * h = -------------------------------  + h1
+             *                   a
+             */
+            pressure_alt = (((pow((p / p1), (-(a * R) / g))) * T1) - T1) / a;
+
+            // set pressure alt to changed
+            fields_changed |= (1 << 11);
+
+            emit sensorHilRawImuChanged(QGC::groundTimeUsecs(), xacc, yacc, zacc, rollspeed, pitchspeed, yawspeed,
+                                        xmag, ymag, zmag, abs_pressure, diff_pressure / 100.0, pressure_alt, temperature, fields_changed);
+
+            // XXX make these GUI-configurable and add randomness
+            int gps_fix_type = 3;
+            float eph = 0.3f;
+            float epv = 0.6f;
+            float vel = sqrt(vx*vx + vy*vy + vz*vz);
+            float cog = atan2(vy, vx);
+            int satellites = 8;
+
+            emit sensorHilGpsChanged(QGC::groundTimeUsecs(), lat, lon, alt, gps_fix_type, eph, epv, vel, vx, vy, vz, cog, satellites);
+        } else {
+            emit hilStateChanged(QGC::groundTimeUsecs(), roll, pitch, yaw, rollspeed,
+                                 pitchspeed, yawspeed, lat, lon, alt,
+                                 vx, vy, vz, ind_airspeed, true_airspeed, xacc, yacc, zacc);
+        }
+
+        // Limit ground truth to 25 Hz
+        if (QGC::groundTimeMilliseconds() - simUpdateLastGroundTruth > 40) {
+            emit hilGroundTruthChanged(QGC::groundTimeUsecs(), roll, pitch, yaw, rollspeed,
+                                       pitchspeed, yawspeed, lat, lon, alt,
+                                       vx, vy, vz, ind_airspeed, true_airspeed, xacc, yacc, zacc);
+
+            simUpdateLastGroundTruth = QGC::groundTimeMilliseconds();
+        }
     }
 
     if (!oldConnectionState && xPlaneConnected)
     {
-        emit statusMessage("Receiving from XPlane.");
+        emit statusMessage(tr("Receiving from XPlane."));
     }
 
     //    // Echo data for debugging purposes
@@ -544,49 +912,18 @@ qint64 QGCXPlaneLink::bytesAvailable()
  **/
 bool QGCXPlaneLink::disconnectSimulation()
 {
-    if (!connectState) return true;
-
-    connectState = false;
-
-    if (process) disconnect(process, SIGNAL(error(QProcess::ProcessError)),
-               this, SLOT(processError(QProcess::ProcessError)));
-    if (mav)
+    if (connectState)
     {
-        disconnect(mav, SIGNAL(hilControlsChanged(uint64_t, float, float, float, float, uint8_t, uint8_t)), this, SLOT(updateControls(uint64_t,float,float,float,float,uint8_t,uint8_t)));
-        disconnect(mav, SIGNAL(hilActuatorsChanged(uint64_t, float, float, float, float, float, float, float, float)), this, SLOT(updateActuators(uint64_t,float,float,float,float,float,float,float,float)));
-        disconnect(this, SIGNAL(hilStateChanged(uint64_t,float,float,float,float,float,float,int32_t,int32_t,int32_t,int16_t,int16_t,int16_t,int16_t,int16_t,int16_t)), mav, SLOT(sendHilState(uint64_t,float,float,float,float,float,float,int32_t,int32_t,int32_t,int16_t,int16_t,int16_t,int16_t,int16_t,int16_t)));
-        UAS* uas = dynamic_cast<UAS*>(mav);
-        if (uas)
-        {
-            uas->stopHil();
-        }
+        _should_exit = true;
+    } else {
+        emit simulationDisconnected();
+        emit simulationConnected(false);
     }
 
-    if (process)
-    {
-        process->close();
-        delete process;
-        process = NULL;
-    }
-    if (terraSync)
-    {
-        terraSync->close();
-        delete terraSync;
-        terraSync = NULL;
-    }
-    if (socket)
-    {
-        socket->close();
-        delete socket;
-        socket = NULL;
-    }
-
-    emit simulationDisconnected();
-    emit simulationConnected(false);
     return !connectState;
 }
 
-void QGCXPlaneLink::selectPlane(const QString& plane)
+void QGCXPlaneLink::selectAirframe(const QString& plane)
 {
     airframeName = plane;
 
@@ -680,14 +1017,14 @@ void QGCXPlaneLink::setRandomPosition()
     double offLon = rand() / static_cast<double>(RAND_MAX) / 500.0 + 1.0/500.0;
     double offAlt = rand() / static_cast<double>(RAND_MAX) * 200.0 + 100.0;
 
-    if (mav->getAltitude() + offAlt < 0)
+    if (mav->getAltitudeAMSL() + offAlt < 0)
     {
         offAlt *= -1.0;
     }
 
     setPositionAttitude(mav->getLatitude() + offLat,
                         mav->getLongitude() + offLon,
-                        mav->getAltitude() + offAlt,
+                        mav->getAltitudeAMSL() + offAlt,
                         mav->getRoll(),
                         mav->getPitch(),
                         mav->getYaw());
@@ -704,7 +1041,7 @@ void QGCXPlaneLink::setRandomAttitude()
 
     setPositionAttitude(mav->getLatitude(),
                         mav->getLongitude(),
-                        mav->getAltitude(),
+                        mav->getAltitudeAMSL(),
                         roll,
                         pitch,
                         yaw);
@@ -717,74 +1054,17 @@ void QGCXPlaneLink::setRandomAttitude()
  **/
 bool QGCXPlaneLink::connectSimulation()
 {
-    qDebug() << "STARTING X-PLANE LINK, CONNECTING TO" << remoteHost << ":" << remotePort;
+    if (connectState) {
+        qDebug() << "Simulation already active";
+    } else {
+        qDebug() << "STARTING X-PLANE LINK, CONNECTING TO" << remoteHost << ":" << remotePort;
+        // XXX Hack
+        storeSettings();
 
-    start(LowPriority);
-
-    if (!mav) return false;
-    if (connectState) return false;
-
-    socket = new QUdpSocket(this);
-    connectState = socket->bind(localHost, localPort);
-    if (!connectState) return false;
-
-    QObject::connect(socket, SIGNAL(readyRead()), this, SLOT(readBytes()));
-
-    //process = new QProcess(this);
-    //terraSync = new QProcess(this);
-
-    connect(mav, SIGNAL(hilControlsChanged(uint64_t, float, float, float, float, uint8_t, uint8_t)), this, SLOT(updateControls(uint64_t,float,float,float,float,uint8_t,uint8_t)));
-    connect(mav, SIGNAL(hilActuatorsChanged(uint64_t, float, float, float, float, float, float, float, float)), this, SLOT(updateActuators(uint64_t,float,float,float,float,float,float,float,float)));
-    connect(this, SIGNAL(hilStateChanged(uint64_t,float,float,float,float,float,float,int32_t,int32_t,int32_t,int16_t,int16_t,int16_t,int16_t,int16_t,int16_t)), mav, SLOT(sendHilState(uint64_t,float,float,float,float,float,float,int32_t,int32_t,int32_t,int16_t,int16_t,int16_t,int16_t,int16_t,int16_t)));
-
-    UAS* uas = dynamic_cast<UAS*>(mav);
-    if (uas)
-    {
-        uas->startHil();
+        start(HighPriority);
     }
 
-#pragma pack(push, 1)
-    struct iset_struct
-    {
-        char b[5];
-        int index; // (0->20 in the lsit below)
-        char str_ipad_them[16];
-        char str_port_them[6];
-        char padding[2];
-        int use_ip;
-    } ip; // to use this option, 0 not to.
-#pragma pack(pop)
-
-    ip.b[0] = 'I';
-    ip.b[1] = 'S';
-    ip.b[2] = 'E';
-    ip.b[3] = 'T';
-    ip.b[4] = '0';
-
-    QList<QHostAddress> hostAddresses = QNetworkInterface::allAddresses();
-
-    QString localAddrStr;
-    QString localPortStr = QString("%1").arg(localPort);
-
-    for (int i = 0; i < hostAddresses.size(); i++)
-    {
-        // Exclude loopback IPv4 and all IPv6 addresses
-        if (hostAddresses.at(i) != QHostAddress("127.0.0.1") && !hostAddresses.at(i).toString().contains(":"))
-        {
-            localAddrStr = hostAddresses.at(i).toString();
-            break;
-        }
-    }
-
-    //qDebug() << "REQ SEND TO:" << localAddrStr << localPortStr;
-
-    ip.index = 0;
-    strncpy(ip.str_ipad_them, localAddrStr.toAscii(), qMin((int)sizeof(ip.str_ipad_them), 16));
-    strncpy(ip.str_port_them, localPortStr.toAscii(), qMin((int)sizeof(ip.str_port_them), 6));
-    ip.use_ip = 1;
-
-    writeBytes((const char*)&ip, sizeof(ip));
-    return connectState;
+    return true;
 }
 
 /**

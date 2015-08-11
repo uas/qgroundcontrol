@@ -2,7 +2,7 @@
 
 QGroundControl Open Source Ground Control Station
 
-(c) 2009 - 2011 QGROUNDCONTROL PROJECT <http://www.qgroundcontrol.org>
+(c) 2009 - 2015 QGROUNDCONTROL PROJECT <http://www.qgroundcontrol.org>
 
 This file is part of the QGROUNDCONTROL project
 
@@ -28,34 +28,94 @@ This file is part of the QGROUNDCONTROL project
  *
  */
 
+#include <QtGlobal>
+#if QT_VERSION > 0x050401
+#define UDP_BROKEN_SIGNAL 1
+#else
+#define UDP_BROKEN_SIGNAL 0
+#endif
+
 #include <QTimer>
 #include <QList>
 #include <QDebug>
 #include <QMutexLocker>
+#include <QNetworkProxy>
 #include <iostream>
+
 #include "UDPLink.h"
-#include "LinkManager.h"
 #include "QGC.h"
 #include <QHostInfo>
-//#include <netinet/in.h>
 
-UDPLink::UDPLink(QHostAddress host, quint16 port)
-	: socket(NULL)
+#define REMOVE_GONE_HOSTS 0
+
+static const char* kZeroconfRegistration = "_qgroundcontrol._udp";
+
+static bool is_ip(const QString& address)
 {
-    this->host = host;
-    this->port = port;
-    this->connectState = false;
-    // Set unique ID and add link to the list of links
-    this->id = getNextLinkId();
-	this->name = tr("UDP Link (port:%1)").arg(this->port);
-	emit nameChanged(this->name);
-    // LinkManager::instance()->add(this);
+    int a,b,c,d;
+    if (sscanf(address.toStdString().c_str(), "%d.%d.%d.%d", &a, &b, &c, &d) != 4
+            && strcmp("::1", address.toStdString().c_str())) {
+        return false;
+    } else {
+        return true;
+    }
+}
+
+static QString get_ip_address(const QString& address)
+{
+    if(is_ip(address))
+        return address;
+    // Need to look it up
+    QHostInfo info = QHostInfo::fromName(address);
+    if (info.error() == QHostInfo::NoError)
+    {
+        QList<QHostAddress> hostAddresses = info.addresses();
+        QHostAddress address;
+        for (int i = 0; i < hostAddresses.size(); i++)
+        {
+            // Exclude all IPv6 addresses
+            if (!hostAddresses.at(i).toString().contains(":"))
+            {
+                return hostAddresses.at(i).toString();
+            }
+        }
+    }
+    return QString("");
+}
+
+UDPLink::UDPLink(UDPConfiguration* config)
+    : _socket(NULL)
+    , _connectState(false)
+    #if defined(QGC_ZEROCONF_ENABLED)
+    , _dnssServiceRef(NULL)
+    #endif
+    , _running(false)
+{
+    Q_ASSERT(config != NULL);
+    _config = config;
+    _config->setLink(this);
+
+    // We're doing it wrong - because the Qt folks got the API wrong:
+    // http://blog.qt.digia.com/blog/2010/06/17/youre-doing-it-wrong/
+    moveToThread(this);
+
+    //qDebug() << "UDP Created " << _config->name();
 }
 
 UDPLink::~UDPLink()
 {
-    disconnect();
-	this->deleteLater();
+    // Disconnect link from configuration
+    _config->setLink(NULL);
+    _disconnect();
+    // Tell the thread to exit
+    _running = false;
+    quit();
+    // Wait for it to exit
+    wait();
+    while(_outQueue.count() > 0) {
+        delete _outQueue.dequeue();
+    }
+    this->deleteLater();
 }
 
 /**
@@ -64,160 +124,136 @@ UDPLink::~UDPLink()
  **/
 void UDPLink::run()
 {
-	exec();
+    if(_hardwareConnect()) {
+        if(UDP_BROKEN_SIGNAL) {
+            bool loop = false;
+            while(true) {
+                //-- Anything to read?
+                loop = _socket->hasPendingDatagrams();
+                if(loop) {
+                    readBytes();
+                }
+                //-- Loop right away if busy
+                if((_dequeBytes() || loop) && _running)
+                    continue;
+                if(!_running)
+                    break;
+                //-- Settle down (it gets here if there is nothing to read or write)
+                this->msleep(50);
+            }
+        } else {
+            exec();
+        }
+    }
+    if (_socket) {
+        _deregisterZeroconf();
+        _socket->close();
+    }
 }
 
-void UDPLink::setAddress(QHostAddress host)
+void UDPLink::_restartConnection()
 {
-    bool reconnect(false);
-	if(this->isConnected())
-	{
-		disconnect();
-		reconnect = true;
-	}
-	this->host = host;
-	if(reconnect)
-	{
-		connect();
-	}
+    if(this->isConnected())
+    {
+        _disconnect();
+        _connect();
+    }
 }
 
-void UDPLink::setPort(int port)
+QString UDPLink::getName() const
 {
-	bool reconnect(false);
-	if(this->isConnected())
-	{
-		disconnect();
-		reconnect = true;
-	}
-    this->port = port;
-	this->name = tr("UDP Link (port:%1)").arg(this->port);
-	emit nameChanged(this->name);
-	if(reconnect)
-	{
-		connect();
-	}
+    return _config->name();
 }
 
-/**
- * @param host Hostname in standard formatting, e.g. localhost:14551 or 192.168.1.1:14551
- */
 void UDPLink::addHost(const QString& host)
 {
-    //qDebug() << "UDP:" << "ADDING HOST:" << host;
-    if (host.contains(":"))
-    {
-        //qDebug() << "HOST: " << host.split(":").first();
-        QHostInfo info = QHostInfo::fromName(host.split(":").first());
-        if (info.error() == QHostInfo::NoError)
-        {
-            // Add host
-            QList<QHostAddress> hostAddresses = info.addresses();
-            QHostAddress address;
-            for (int i = 0; i < hostAddresses.size(); i++)
-            {
-                // Exclude loopback IPv4 and all IPv6 addresses
-                if (!hostAddresses.at(i).toString().contains(":"))
-                {
-                    address = hostAddresses.at(i);
-                }
-            }
-            hosts.append(address);
-            //qDebug() << "Address:" << address.toString();
-            // Set port according to user input
-            ports.append(host.split(":").last().toInt());
-        }
-    }
-    else
-    {
-        QHostInfo info = QHostInfo::fromName(host);
-        if (info.error() == QHostInfo::NoError)
-        {
-            // Add host
-            hosts.append(info.addresses().first());
-            // Set port according to default (this port)
-            ports.append(port);
-        }
-    }
+    _config->addHost(host);
 }
 
-void UDPLink::removeHost(const QString& hostname)
+void UDPLink::removeHost(const QString& host)
 {
-    QString host = hostname;
-    if (host.contains(":")) host = host.split(":").first();
-    host = host.trimmed();
-    QHostInfo info = QHostInfo::fromName(host);
-    QHostAddress address;
-    QList<QHostAddress> hostAddresses = info.addresses();
-    for (int i = 0; i < hostAddresses.size(); i++)
-    {
-        // Exclude loopback IPv4 and all IPv6 addresses
-        if (!hostAddresses.at(i).toString().contains(":"))
-        {
-            address = hostAddresses.at(i);
-        }
-    }
-    for (int i = 0; i < hosts.count(); ++i)
-    {
-        if (hosts.at(i) == address)
-        {
-            hosts.removeAt(i);
-            ports.removeAt(i);
-        }
-    }
+    _config->removeHost(host);
 }
 
 void UDPLink::writeBytes(const char* data, qint64 size)
 {
-    // Broadcast to all connected systems
-    for (int h = 0; h < hosts.size(); h++)
-    {
-        QHostAddress currentHost = hosts.at(h);
-        quint16 currentPort = ports.at(h);
-//#define UDPLINK_DEBUG
-#ifdef UDPLINK_DEBUG
-        QString bytes;
-        QString ascii;
-        for (int i=0; i<size; i++)
-        {
-            unsigned char v = data[i];
-            bytes.append(QString().sprintf("%02x ", v));
-            if (data[i] > 31 && data[i] < 127)
-            {
-                ascii.append(data[i]);
+    if (!_socket) {
+        return;
+    }
+    if(UDP_BROKEN_SIGNAL) {
+        QByteArray* qdata = new QByteArray(data, size);
+        QMutexLocker lock(&_mutex);
+        _outQueue.enqueue(qdata);
+    } else {
+        _sendBytes(data, size);
+    }
+}
+
+
+bool UDPLink::_dequeBytes()
+{
+    QMutexLocker lock(&_mutex);
+    if(_outQueue.count() > 0) {
+        QByteArray* qdata = _outQueue.dequeue();
+        lock.unlock();
+        _sendBytes(qdata->data(), qdata->size());
+        delete qdata;
+        lock.relock();
+    }
+    return (_outQueue.count() > 0);
+}
+
+void UDPLink::_sendBytes(const char* data, qint64 size)
+{
+    QStringList goneHosts;
+    // Send to all connected systems
+    QString host;
+    int port;
+    if(_config->firstHost(host, port)) {
+        do {
+            QHostAddress currentHost(host);
+            if(_socket->writeDatagram(data, size, currentHost, (quint16)port) < 0) {
+                // This host is gone. Add to list to be removed
+                // We should keep track of hosts that were manually added (static) and
+                // hosts that were added because we heard from them (dynamic). Only
+                // dynamic hosts should be removed and even then, after a few tries, not
+                // the first failure. In the mean time, we don't remove anything.
+                if(REMOVE_GONE_HOSTS) {
+                    goneHosts.append(host);
+                }
+            } else {
+                // Only log rate if data actually got sent. Not sure about this as
+                // "host not there" takes time too regardless of size of data. In fact,
+                // 1 byte or "UDP frame size" bytes are the same as that's the data
+                // unit sent by UDP.
+                _logOutputDataRate(size, QDateTime::currentMSecsSinceEpoch());
             }
-            else
-            {
-                ascii.append(219);
-            }
+        } while (_config->nextHost(host, port));
+        //-- Remove hosts that are no longer there
+        foreach (QString ghost, goneHosts) {
+            _config->removeHost(ghost);
         }
-        qDebug() << "Sent" << size << "bytes to" << currentHost.toString() << ":" << currentPort << "data:";
-        qDebug() << bytes;
-        qDebug() << "ASCII:" << ascii;
-#endif
-        socket->writeDatagram(data, size, currentHost, currentPort);
     }
 }
 
 /**
  * @brief Read a number of bytes from the interface.
- *
- * @param data Pointer to the data byte array to write the bytes to
- * @param maxLength The maximum number of bytes to write
  **/
 void UDPLink::readBytes()
 {
-    while (socket->hasPendingDatagrams())
+    while (_socket->hasPendingDatagrams())
     {
         QByteArray datagram;
-        datagram.resize(socket->pendingDatagramSize());
+        datagram.resize(_socket->pendingDatagramSize());
 
         QHostAddress sender;
         quint16 senderPort;
-        socket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
+        _socket->readDatagram(datagram.data(), datagram.size(), &sender, &senderPort);
 
         // FIXME TODO Check if this method is better than retrieving the data by individual processes
         emit bytesReceived(this, datagram);
+
+        _logInputDataRate(datagram.length(), QDateTime::currentMSecsSinceEpoch());
 
 //        // Echo data for debugging purposes
 //        std::cerr << __FILE__ << __LINE__ << "Received datagram:" << std::endl;
@@ -229,31 +265,14 @@ void UDPLink::readBytes()
 //        }
 //        std::cerr << std::endl;
 
-
-        // Add host to broadcast list if not yet present
-        if (!hosts.contains(sender))
-        {
-            hosts.append(sender);
-            ports.append(senderPort);
-            //        ports->insert(sender, senderPort);
-        }
-        else
-        {
-            int index = hosts.indexOf(sender);
-            ports.replace(index, senderPort);
-        }
+        // TODO This doesn't validade the sender. Anything sending UDP packets to this port gets
+        // added to the list and will start receiving datagrams from here. Even a port scanner
+        // would trigger this.
+        // Add host to broadcast list if not yet present, or update its port
+        _config->addHost(sender.toString(), (int)senderPort);
+        if(UDP_BROKEN_SIGNAL && !_running)
+            break;
     }
-}
-
-
-/**
- * @brief Get the number of bytes to read.
- *
- * @return The number of bytes to read
- **/
-qint64 UDPLink::bytesAvailable()
-{
-    return socket->pendingDatagramSize();
 }
 
 /**
@@ -261,22 +280,19 @@ qint64 UDPLink::bytesAvailable()
  *
  * @return True if connection has been disconnected, false if connection couldn't be disconnected.
  **/
-bool UDPLink::disconnect()
+bool UDPLink::_disconnect(void)
 {
-	this->quit();
-	this->wait();
-
-        if(socket)
-	{
-		delete socket;
-		socket = NULL;
-	}
-
-    connectState = false;
-
-    emit disconnected();
-    emit connected(false);
-    return !connectState;
+    _running = false;
+    quit();
+    wait();
+    if (_socket) {
+        // Make sure delete happen on correct thread
+        _socket->deleteLater();
+        _socket = NULL;
+        emit disconnected();
+    }
+    _connectState = false;
+    return true;
 }
 
 /**
@@ -284,156 +300,263 @@ bool UDPLink::disconnect()
  *
  * @return True if connection has been established, false if connection couldn't be established.
  **/
-bool UDPLink::connect()
+bool UDPLink::_connect(void)
 {
-	if(this->isRunning())
-	{
-		this->quit();
-		this->wait();
-	}
-    bool connected = this->hardwareConnect();
-    start(HighPriority);
-    return connected;
-}
-
-bool UDPLink::hardwareConnect(void)
-{
-	socket = new QUdpSocket();
-
-    //Check if we are using a multicast-address
-//    bool multicast = false;
-//    if (host.isInSubnet(QHostAddress("224.0.0.0"),4))
-//    {
-//        multicast = true;
-//        connectState = socket->bind(port, QUdpSocket::ShareAddress);
-//    }
-//    else
-//    {
-    connectState = socket->bind(host, port);
-//    }
-
-    //Provides Multicast functionality to UdpSocket
-    /* not working yet
-    if (multicast)
+    if(this->isRunning() || _running)
     {
-        int sendingFd = socket->socketDescriptor();
-
-        if (sendingFd != -1)
-        {
-            // set up destination address
-            struct sockaddr_in sendAddr;
-            memset(&sendAddr,0,sizeof(sendAddr));
-            sendAddr.sin_family=AF_INET;
-            sendAddr.sin_addr.s_addr=inet_addr(HELLO_GROUP);
-            sendAddr.sin_port=htons(port);
-
-            // set TTL
-            unsigned int ttl = 1; // restricted to the same subnet
-            if (setsockopt(sendingFd, IPPROTO_IP, IP_MULTICAST_TTL, (unsigned int*)&ttl, sizeof(ttl) ) < 0)
-            {
-                std::cout << "TTL failed\n";
-            }
-        }
+        _running = false;
+        quit();
+        wait();
     }
-    */
-
-    //QObject::connect(socket, SIGNAL(readyRead()), this, SLOT(readPendingDatagrams()));
-    QObject::connect(socket, SIGNAL(readyRead()), this, SLOT(readBytes()));
-
-    emit connected(connectState);
-    if (connectState) {
-        emit connected();
-        connectionStartTime = QGC::groundTimeUsecs()/1000;
-    }
-	return connectState;
+    _running = true;
+    start(NormalPriority);
+    return true;
 }
 
+bool UDPLink::_hardwareConnect()
+{
+    if (_socket) {
+        delete _socket;
+        _socket = NULL;
+    }
+    QHostAddress host = QHostAddress::AnyIPv4;
+    _socket = new QUdpSocket();
+    _socket->setProxy(QNetworkProxy::NoProxy);
+    _connectState = _socket->bind(host, _config->localPort(), QAbstractSocket::ReuseAddressHint);
+    if (_connectState) {
+        _registerZeroconf(_config->localPort(), kZeroconfRegistration);
+        //-- Connect signal if this version of Qt is not broken
+        if(!UDP_BROKEN_SIGNAL) {
+            QObject::connect(_socket, SIGNAL(readyRead()), this, SLOT(readBytes()));
+        }
+        emit connected();
+    } else {
+        emit communicationError("UDP Link Error", "Error binding UDP port");
+    }
+    return _connectState;
+}
 
 /**
  * @brief Check if connection is active.
  *
  * @return True if link is connected, false otherwise.
  **/
-bool UDPLink::isConnected()
+bool UDPLink::isConnected() const
 {
-    return connectState;
+    return _connectState;
 }
 
-int UDPLink::getId()
-{
-    return id;
-}
-
-QString UDPLink::getName()
-{
-    return name;
-}
-
-void UDPLink::setName(QString name)
-{
-    this->name = name;
-    emit nameChanged(this->name);
-}
-
-
-qint64 UDPLink::getNominalDataRate()
+qint64 UDPLink::getConnectionSpeed() const
 {
     return 54000000; // 54 Mbit
 }
 
-qint64 UDPLink::getTotalUpstream()
+qint64 UDPLink::getCurrentInDataRate() const
 {
-    statisticsMutex.lock();
-    qint64 totalUpstream = bitsSentTotal / ((QGC::groundTimeUsecs()/1000 - connectionStartTime) / 1000);
-    statisticsMutex.unlock();
-    return totalUpstream;
+    return 0;
 }
 
-qint64 UDPLink::getCurrentUpstream()
+qint64 UDPLink::getCurrentOutDataRate() const
 {
-    return 0; // TODO
+    return 0;
 }
 
-qint64 UDPLink::getMaxUpstream()
+void UDPLink::_registerZeroconf(uint16_t port, const std::string &regType)
 {
-    return 0; // TODO
+#if defined(QGC_ZEROCONF_ENABLED)
+    DNSServiceErrorType result = DNSServiceRegister(&_dnssServiceRef, 0, 0, 0,
+        regType.c_str(),
+        NULL,
+        NULL,
+        htons(port),
+        0,
+        NULL,
+        NULL,
+        NULL);
+    if (result != kDNSServiceErr_NoError)
+    {
+        emit communicationError("UDP Link Error", "Error registering Zeroconf");
+        _dnssServiceRef = NULL;
+    }
+#else
+    Q_UNUSED(port);
+    Q_UNUSED(regType);
+#endif
 }
 
-qint64 UDPLink::getBitsSent()
+void UDPLink::_deregisterZeroconf()
 {
-    return bitsSentTotal;
+#if defined(QGC_ZEROCONF_ENABLED)
+    if (_dnssServiceRef)
+     {
+         DNSServiceRefDeallocate(_dnssServiceRef);
+         _dnssServiceRef = NULL;
+     }
+#endif
 }
 
-qint64 UDPLink::getBitsReceived()
+//--------------------------------------------------------------------------
+//-- UDPConfiguration
+
+UDPConfiguration::UDPConfiguration(const QString& name) : LinkConfiguration(name)
 {
-    return bitsReceivedTotal;
+    _localPort = QGC_UDP_LOCAL_PORT;
 }
 
-qint64 UDPLink::getTotalDownstream()
+UDPConfiguration::UDPConfiguration(UDPConfiguration* source) : LinkConfiguration(source)
 {
-    statisticsMutex.lock();
-    qint64 totalDownstream = bitsReceivedTotal / ((QGC::groundTimeUsecs()/1000 - connectionStartTime) / 1000);
-    statisticsMutex.unlock();
-    return totalDownstream;
+    _localPort = source->localPort();
+    _hosts.clear();
+    QString host;
+    int port;
+    if(source->firstHost(host, port)) {
+        do {
+            addHost(host, port);
+        } while(source->nextHost(host, port));
+    }
 }
 
-qint64 UDPLink::getCurrentDownstream()
+void UDPConfiguration::copyFrom(LinkConfiguration *source)
 {
-    return 0; // TODO
+    LinkConfiguration::copyFrom(source);
+    UDPConfiguration* usource = dynamic_cast<UDPConfiguration*>(source);
+    Q_ASSERT(usource != NULL);
+    _localPort = usource->localPort();
+    _hosts.clear();
+    QString host;
+    int port;
+    if(usource->firstHost(host, port)) {
+        do {
+            addHost(host, port);
+        } while(usource->nextHost(host, port));
+    }
 }
 
-qint64 UDPLink::getMaxDownstream()
+/**
+ * @param host Hostname in standard formatt, e.g. localhost:14551 or 192.168.1.1:14551
+ */
+void UDPConfiguration::addHost(const QString& host)
 {
-    return 0; // TODO
+    // Handle x.x.x.x:p
+    if (host.contains(":"))
+    {
+        addHost(host.split(":").first(), host.split(":").last().toInt());
+    }
+    // If no port, use default
+    else
+    {
+        addHost(host, (int)_localPort);
+    }
 }
 
-bool UDPLink::isFullDuplex()
+void UDPConfiguration::addHost(const QString& host, int port)
 {
-    return true;
+    QMutexLocker locker(&_confMutex);
+    if(_hosts.contains(host)) {
+        if(_hosts[host] != port) {
+            _hosts[host] = port;
+        }
+    } else {
+        QString ipAdd = get_ip_address(host);
+        if(ipAdd.isEmpty()) {
+            qWarning() << "UDP:" << "Could not resolve host:" << host << "port:" << port;
+        } else {
+            _hosts[ipAdd] = port;
+            //qDebug() << "UDP:" << "Adding Host:" << ipAdd << ":" << port;
+        }
+    }
 }
 
-int UDPLink::getLinkQuality()
+void UDPConfiguration::removeHost(const QString& host)
 {
-    /* This feature is not supported with this interface */
-    return -1;
+    QMutexLocker locker(&_confMutex);
+    QString tHost = host;
+    if (tHost.contains(":")) {
+        tHost = tHost.split(":").first();
+    }
+    tHost = tHost.trimmed();
+    QMap<QString, int>::iterator i = _hosts.find(tHost);
+    if(i != _hosts.end()) {
+        //qDebug() << "UDP:" << "Removed host:" << host;
+        _hosts.erase(i);
+    } else {
+        qWarning() << "UDP:" << "Could not remove unknown host:" << host;
+    }
+}
+
+bool UDPConfiguration::firstHost(QString& host, int& port)
+{
+    _confMutex.lock();
+    _it = _hosts.begin();
+    if(_it == _hosts.end()) {
+        _confMutex.unlock();
+        return false;
+    }
+    _confMutex.unlock();
+    return nextHost(host, port);
+}
+
+bool UDPConfiguration::nextHost(QString& host, int& port)
+{
+    QMutexLocker locker(&_confMutex);
+    if(_it != _hosts.end()) {
+        host = _it.key();
+        port = _it.value();
+        _it++;
+        return true;
+    }
+    return false;
+}
+
+void UDPConfiguration::setLocalPort(quint16 port)
+{
+    _localPort = port;
+}
+
+void UDPConfiguration::saveSettings(QSettings& settings, const QString& root)
+{
+    _confMutex.lock();
+    settings.beginGroup(root);
+    settings.setValue("port", (int)_localPort);
+    settings.setValue("hostCount", _hosts.count());
+    int index = 0;
+    QMap<QString, int>::const_iterator it = _hosts.begin();
+    while(it != _hosts.end()) {
+        QString hkey = QString("host%1").arg(index);
+        settings.setValue(hkey, it.key());
+        QString pkey = QString("port%1").arg(index);
+        settings.setValue(pkey, it.value());
+        it++;
+        index++;
+    }
+    settings.endGroup();
+    _confMutex.unlock();
+}
+
+void UDPConfiguration::loadSettings(QSettings& settings, const QString& root)
+{
+    _confMutex.lock();
+    _hosts.clear();
+    _confMutex.unlock();
+    settings.beginGroup(root);
+    _localPort = (quint16)settings.value("port", QGC_UDP_LOCAL_PORT).toUInt();
+    int hostCount = settings.value("hostCount", 0).toInt();
+    for(int i = 0; i < hostCount; i++) {
+        QString hkey = QString("host%1").arg(i);
+        QString pkey = QString("port%1").arg(i);
+        if(settings.contains(hkey) && settings.contains(pkey)) {
+            addHost(settings.value(hkey).toString(), settings.value(pkey).toInt());
+        }
+    }
+    settings.endGroup();
+}
+
+void UDPConfiguration::updateSettings()
+{
+    if(_link) {
+        UDPLink* ulink = dynamic_cast<UDPLink*>(_link);
+        if(ulink) {
+            ulink->_restartConnection();
+        }
+    }
 }

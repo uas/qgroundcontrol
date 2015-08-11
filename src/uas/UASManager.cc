@@ -10,29 +10,52 @@
 
 #include <QList>
 #include <QApplication>
-#include <QMessageBox>
 #include <QTimer>
 #include <QSettings>
+
 #include "UAS.h"
 #include "UASInterface.h"
 #include "UASManager.h"
 #include "QGC.h"
+#include "QGCMessageBox.h"
+#include "QGCApplication.h"
 
 #define PI 3.1415926535897932384626433832795
 #define MEAN_EARTH_DIAMETER	12756274.0
 #define UMR	0.017453292519943295769236907684886
 
-UASManager* UASManager::instance()
-{
-    static UASManager* _instance = 0;
-    if(_instance == 0) {
-        _instance = new UASManager();
+IMPLEMENT_QGC_SINGLETON(UASManager, UASManagerInterface)
 
-        // Set the application as parent to ensure that this object
-        // will be destroyed when the main application exits
-        _instance->setParent(qApp);
+UASManager::UASManager(QObject* parent) :
+    UASManagerInterface(parent),
+    activeUAS(NULL),
+    offlineUASWaypointManager(NULL),
+    homeLat(47.3769),
+    homeLon(8.549444),
+    homeAlt(470.0),
+    homeFrame(MAV_FRAME_GLOBAL)
+{
+    loadSettings();
+    setLocalNEDSafetyBorders(1, -1, 0, -1, 1, -1);
+}
+
+UASManager::~UASManager()
+{
+    storeSettings();
+    Q_ASSERT_X(systems.count() == 0, "~UASManager", "_shutdown should have already removed all uas");
+}
+
+void UASManager::_shutdown(void)
+{
+    QList<UASInterface*> uasList;
+    
+    foreach(UASInterface* uas, systems) {
+        uasList.append(uas);
     }
-    return _instance;
+    
+    foreach(UASInterface* uas, uasList) {
+        removeUAS(uas);
+    }
 }
 
 void UASManager::storeSettings()
@@ -43,13 +66,11 @@ void UASManager::storeSettings()
     settings.setValue("HOMELON", homeLon);
     settings.setValue("HOMEALT", homeAlt);
     settings.endGroup();
-    settings.sync();
 }
 
 void UASManager::loadSettings()
 {
     QSettings settings;
-    settings.sync();
     settings.beginGroup("QGC_UASMANAGER");
     bool changed =  setHomePosition(settings.value("HOMELAT", homeLat).toDouble(),
                                     settings.value("HOMELON", homeLon).toDouble(),
@@ -75,9 +96,9 @@ bool UASManager::setHomePosition(double lat, double lon, double alt)
         && lat <= 90.0 && lat >= -90.0 && lon <= 180.0 && lon >= -180.0)
         {
 
-        if (homeLat != lat) changed = true;
-        if (homeLon != lon) changed = true;
-        if (homeAlt != alt) changed = true;
+        if (fabs(homeLat - lat) > 1e-7) changed = true;
+        if (fabs(homeLon - lon) > 1e-7) changed = true;
+        if (fabs(homeAlt - alt) > 0.5f) changed = true;
 
         // Initialize conversion reference in any case
         initReference(lat, lon, alt);
@@ -89,15 +110,27 @@ bool UASManager::setHomePosition(double lat, double lon, double alt)
             homeAlt = alt;
 
             emit homePositionChanged(homeLat, homeLon, homeAlt);
-
-            // Update all UAVs
-            foreach (UASInterface* mav, systems)
-            {
-                mav->setHomePosition(homeLat, homeLon, homeAlt);
-            }
         }
     }
     return changed;
+}
+
+bool UASManager::setHomePositionAndNotify(double lat, double lon, double alt)
+{
+    // Checking for NaN and infitiny
+    // and checking for borders
+    bool changed = setHomePosition(lat, lon, alt);
+
+    if (changed)
+    {
+        // Update all UAVs
+        foreach (UASInterface* mav, systems)
+        {
+            mav->setHomePosition(homeLat, homeLon, homeAlt);
+        }
+    }
+
+	return changed;
 }
 
 /**
@@ -206,47 +239,23 @@ void UASManager::nedToWgs84(const double& x, const double& y, const double& z, d
  */
 void UASManager::uavChangedHomePosition(int uav, double lat, double lon, double alt)
 {
-    // FIXME: Accept any home position change for now from the active UAS
-    // this means that the currently select UAS can change the home location
-    // of the whole swarm. This makes sense, but more control might be needed
+    // Accept home position changes from the active UAS
     if (uav == activeUAS->getUASID())
     {
         if (setHomePosition(lat, lon, alt))
         {
-            foreach (UASInterface* mav, systems)
-            {
-                // Only update the other systems, not the original source
-                if (mav->getUASID() != uav)
-                {
-                    mav->setHomePosition(homeLat, homeLon, homeAlt);
-                }
-            }
+            // XXX DO NOT UPDATE THE WHOLE FLEET
+
+
+//            foreach (UASInterface* mav, systems)
+//            {
+//                // Only update the other systems, not the original source
+//                if (mav->getUASID() != uav)
+//                {
+//                    mav->setHomePosition(homeLat, homeLon, homeAlt);
+//                }
+//            }
         }
-    }
-}
-
-/**
- * @brief Private singleton constructor
- *
- * This class implements the singleton design pattern and has therefore only a private constructor.
- **/
-UASManager::UASManager() :
-        activeUAS(NULL),
-        homeLat(47.3769),
-        homeLon(8.549444),
-        homeAlt(470.0),
-        homeFrame(MAV_FRAME_GLOBAL)
-{
-    loadSettings();
-    setLocalNEDSafetyBorders(1, -1, 0, -1, 1, -1);
-}
-
-UASManager::~UASManager()
-{
-    storeSettings();
-    // Delete all systems
-    foreach (UASInterface* mav, systems) {
-        delete mav;
     }
 }
 
@@ -267,8 +276,8 @@ void UASManager::addUAS(UASInterface* uas)
     // Only execute if there is no UAS at this index
     if (!systems.contains(uas))
     {
+        qDebug() << "Add new UAS: " << uas->getUASID();
         systems.append(uas);
-        connect(uas, SIGNAL(destroyed(QObject*)), this, SLOT(removeUAS(QObject*)));
         // Set home position on UAV if set in UI
         // - this is done on a per-UAV basis
         // Set home position in UI if UAV chooses a new one (caution! if multiple UAVs are connected, take care!)
@@ -280,45 +289,59 @@ void UASManager::addUAS(UASInterface* uas)
     if (firstUAS)
     {
         setActiveUAS(uas);
+        // Call getActiveUASWaypointManager instead of referencing variable to make sure of creation
+        if (getActiveUASWaypointManager()->getWaypointEditableList().size() > 0)
+        {
+            if (QGCMessageBox::question(tr("Question"), tr("Do you want to append the offline waypoints to the ones currently on the UAV?"), QMessageBox::Yes, QMessageBox::No) == QMessageBox::Yes)
+            {
+                //Need to transfer all waypoints from the offline mode WPManager to the online mode.
+                for (int i=0;i<offlineUASWaypointManager->getWaypointEditableList().size();i++)
+                {
+                    Waypoint *wp = uas->getWaypointManager()->createWaypoint();
+                    wp->setLatitude(offlineUASWaypointManager->getWaypointEditableList()[i]->getLatitude());
+                    wp->setLongitude(offlineUASWaypointManager->getWaypointEditableList()[i]->getLongitude());
+                    wp->setAltitude(offlineUASWaypointManager->getWaypointEditableList()[i]->getAltitude());
+                }
+            }
+            offlineUASWaypointManager->deleteLater();
+            offlineUASWaypointManager = 0;
+        }
     }
 }
 
-void UASManager::removeUAS(QObject* uas)
+/**
+ * @brief The function that should be used when removing UASes from QGC. emits UASDeletect(UASInterface*) when triggered
+ *        so that UI elements can update accordingly.
+ * @param uas The UAS to remove
+ */
+void UASManager::removeUAS(UASInterface* uas)
 {
-    UASInterface* mav = qobject_cast<UASInterface*>(uas);
+    if (uas)
+    {
+        int listindex = systems.indexOf(uas);
 
-    if (mav) {
-        int listindex = systems.indexOf(mav);
+        // Remove this system from local data store.
+        systems.removeAt(listindex);
 
-        if (mav == activeUAS)
+        // If this is the active UAS, select a new one if one exists otherwise
+        // indicate that there are no active UASes.
+        if (uas == activeUAS)
         {
-            if (systems.count() > 1)
+            if (systems.count())
             {
-                // We only set a new UAS if more than one is present
-                if (listindex != 0)
-                {
-                    // The system to be removed is not at position 1
-                    // set position one as new active system
-                    setActiveUAS(systems.first());
-                }
-                else
-                {
-                    // The system to be removed is at position 1,
-                    // select the next system
-                    setActiveUAS(systems.at(1));
-                }
+                setActiveUAS(systems.first());
             }
             else
             {
-                // TODO send a null pointer if no UAS is present any more
-                // This has to be properly tested however, since it might
-                // crash code parts not handling null pointers correctly.
-                activeUAS = NULL;
-                // XXX Not emitting the null pointer yet
+                setActiveUAS(NULL);
             }
         }
-        systems.removeAt(listindex);
-        emit UASDeleted(mav);
+
+        // Notify other UI elements that a UAS is being deleted before finally deleting it.
+        qDebug() << "Deleting UAS object: " << uas->getUASName();
+        emit UASDeleted(uas);
+        emit UASDeleted(uas->getUASID());
+        uas->deleteLater();
     }
 }
 
@@ -335,6 +358,20 @@ UASInterface* UASManager::getActiveUAS()
 UASInterface* UASManager::silentGetActiveUAS()
 {
     return activeUAS; ///< Return zero pointer if no UAS has been loaded
+}
+UASWaypointManager *UASManager::getActiveUASWaypointManager()
+{
+    if (activeUAS)
+    {
+        return activeUAS->getWaypointManager();
+    }
+    if (!offlineUASWaypointManager)
+    {
+        offlineUASWaypointManager = new UASWaypointManager(NULL);
+    }
+    return offlineUASWaypointManager;
+
+
 }
 
 bool UASManager::launchActiveUAS()
@@ -384,14 +421,6 @@ bool UASManager::shutdownActiveUAS()
     return (activeUAS);
 }
 
-void UASManager::configureActiveUAS()
-{
-    UASInterface* actUAS = getActiveUAS();
-    if(actUAS) {
-        // Do something
-    }
-}
-
 UASInterface* UASManager::getUASForId(int id)
 {
     UASInterface* system = NULL;
@@ -408,21 +437,23 @@ UASInterface* UASManager::getUASForId(int id)
 
 void UASManager::setActiveUAS(UASInterface* uas)
 {
-    if (uas != NULL) {
-        activeUASMutex.lock();
-        if (activeUAS != NULL) {
-            emit activeUASStatusChanged(activeUAS, false);
-            emit activeUASStatusChanged(activeUAS->getUASID(), false);
-        }
-        activeUAS = uas;
-        activeUASMutex.unlock();
+    // Signal components that the last UAS is no longer active.
+    activeUASMutex.lock();
+    if (activeUAS != NULL) {
+        emit activeUASStatusChanged(activeUAS, false);
+        emit activeUASStatusChanged(activeUAS->getUASID(), false);
+    }
+    activeUAS = uas;
+    activeUASMutex.unlock();
 
+    // And signal that a new UAS is.
+    emit activeUASSet(activeUAS);
+    if (activeUAS)
+    {
         activeUAS->setSelected();
-        emit activeUASSet(uas);
-        emit activeUASSet(uas->getUASID());
-        emit activeUASSetListIndex(systems.indexOf(uas));
-        emit activeUASStatusChanged(uas, true);
-        emit activeUASStatusChanged(uas->getUASID(), true);
+        emit activeUASSetListIndex(systems.indexOf(activeUAS));
+        emit activeUASStatusChanged(activeUAS, true);
+        emit activeUASStatusChanged(activeUAS->getUASID(), true);
     }
 }
 

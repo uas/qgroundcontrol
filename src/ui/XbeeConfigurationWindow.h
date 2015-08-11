@@ -7,12 +7,12 @@
 #include <QTimer>
 #include <QShowEvent>
 #include <QHideEvent>
-#include<QtGui\qcombobox.h>
-#include<QtGui\qlabel.h>
-#include<QtGui\qlayout.h>
+#include <QComboBox>
+#include <QLabel>
+#include <QLayout>
 #include <LinkInterface.h>
 #include"XbeeLinkInterface.h"
-#include "../comm/HexSpinBox.h"
+#include "HexSpinBox.h"
 
 
 class XbeeConfigurationWindow : public QWidget
@@ -22,8 +22,6 @@ class XbeeConfigurationWindow : public QWidget
 public:
 	XbeeConfigurationWindow(LinkInterface* link, QWidget *parent = 0, Qt::WindowFlags flags = Qt::Sheet);
 	~XbeeConfigurationWindow();
-
-	QAction* getAction();
 
 public slots:
 	void configureCommunication();
@@ -49,7 +47,6 @@ private:
 	QHBoxLayout *xbeeLayout;
 	QVBoxLayout *tmpLayout;
 	XbeeLinkInterface* link;
-    QAction* action;
     QTimer* portCheckTimer;
 	HexSpinBox* highAddr;
 	HexSpinBox* lowAddr;

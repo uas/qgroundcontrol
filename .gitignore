@@ -1,3 +1,4 @@
+libs/lib/Frameworks/GStreamer.framework
 *.swp
 *.nfs
 CMakeFiles
@@ -14,14 +15,14 @@ bin/*.exe
 bin/*.txt
 bin/mac
 *pro.user*
+.qmake.stash
 qrc_*.cpp
 *.Debug
 *.Release
 tmp
 debug
 release
-qgroundcontrol
-mavlinkgen-build-desktop
+/qgroundcontrol
 qgroundcontrol.xcodeproj/**
 doc/html
 doc/doxy.log
@@ -47,7 +48,22 @@ user_config.pri
 *.cproject
 *.sln
 *.suo
-
+*.uhf.txt
+*.opensdf
 thirdParty/qserialport-build-desktop/
 thirdParty/qserialport/bin/
 thirdParty/qserialport/lib/
+libs/thirdParty/libxbee/lib/
+GeneratedFiles/
+
+*.autosave
+.settings/
+
+# Generated files
+moc_*
+ui_*
+*.o
+*.a
+*.so*
+*.moc
+*.prl

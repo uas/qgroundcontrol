@@ -20,8 +20,14 @@ public:
 	~XbeeLink();
 	
 public: // virtual functions from XbeeLinkInterface
-	QString getPortName();
-	int getBaudRate();
+	QString getPortName() const;
+	void requestReset() { }
+	int getBaudRate() const;
+    
+    // These are left unimplemented in order to cause linker errors which indicate incorrect usage of
+    // connect/disconnect on link directly. All connect/disconnect calls should be made through LinkManager.
+    bool connect(void);
+    bool disconnect(void);
 
 public slots: // virtual functions from XbeeLinkInterface
 	bool setPortName(QString portName);
@@ -29,21 +35,15 @@ public slots: // virtual functions from XbeeLinkInterface
 	bool setRemoteAddressHigh(quint32 high);
 	bool setRemoteAddressLow(quint32 low);
 
-public: // virtual functions from LinkInterface
-	int getId();
-	QString getName();
-	bool isConnected();
-	qint64 getNominalDataRate();
-	bool isFullDuplex();
-	int getLinkQuality();
-	qint64 getTotalUpstream();
-	qint64 getCurrentUpstream();
-	qint64 getMaxUpstream();
-	qint64 getBitsSent();
-	qint64 getBitsReceived();
-	bool connect();
-	bool disconnect();
-	qint64 bytesAvailable();
+public:
+    // virtual functions from LinkInterface
+    QString getName() const;
+    bool isConnected() const;
+
+    // Extensive statistics for scientific purposes
+    qint64 getConnectionSpeed() const;
+    qint64 getCurrentOutDataRate() const;
+    qint64 getCurrentInDataRate() const;
 
 public slots: // virtual functions from LinkInterface
 	void writeBytes(const char *bytes, qint64 length);
@@ -56,7 +56,6 @@ public:
 
 protected:
 	xbee_con *m_xbeeCon;
-	int m_id;
 	char *m_portName;
 	unsigned int m_portNameLength;
 	int m_baudRate;
@@ -66,7 +65,11 @@ protected:
 	quint32 m_addrLow;
 
 private:
-	bool hardwareConnect();
+    // From LinkInterface
+    virtual bool _connect(void);
+    virtual bool _disconnect(void);
+
+    bool hardwareConnect();
 	//void CALLTYPE portCallback(xbee_con *XbeeCon, xbee_pkt *XbeePkt);
 };
 

@@ -33,7 +33,6 @@ This file is part of the QGROUNDCONTROL project
 #include <QContextMenuEvent>
 #include <QMenu>
 #include <QDesktopServices>
-#include <QFileDialog>
 
 #include <QDebug>
 #include <cmath>
@@ -151,7 +150,7 @@ QGCVideoWidget::QGCVideoWidget(QWidget* parent)
 
     // Fill with black background
     QImage fill = QImage(640, 480, QImage::Format_Indexed8);
-    fill.setNumColors(3);
+    fill.setColorCount(3);
     fill.setColor(0, qRgb(0, 0, 0));
     fill.setColor(1, qRgb(0, 0, 0));
     fill.setColor(2, qRgb(0, 0, 0));
@@ -178,7 +177,7 @@ QGCVideoWidget::QGCVideoWidget(QWidget* parent)
     //setSizePolicy(QSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed));
 
     fontDatabase = QFontDatabase();
-    const QString fontFileName = ":/general/vera.ttf"; ///< Font file is part of the QRC file and compiled into the app
+    const QString fontFileName = ":/res/fonts/vera.ttf"; ///< Font file is part of the QRC file and compiled into the app
     const QString fontFamilyName = "Bitstream Vera Sans";
     if(!QFile::exists(fontFileName)) qDebug() << "ERROR! font file: " << fontFileName << " DOES NOT EXIST!";
 
@@ -1136,7 +1135,7 @@ void QGCVideoWidget::commitRawDataToGL()
         QImage* newImage = new QImage(rawImage, receivedWidth, receivedHeight, format);
         if (format == QImage::Format_Indexed8) {
             // Create matching color table
-            newImage->setNumColors(256);
+            newImage->setColorCount(256);
             for (int i = 0; i < 256; i++) {
                 newImage->setColor(i, qRgb(i, i, i));
                 //qDebug() << __FILE__ << __LINE__ << std::hex << i;

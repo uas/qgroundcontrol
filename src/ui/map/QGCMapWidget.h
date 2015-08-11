@@ -3,7 +3,12 @@
 
 #include <QMap>
 #include <QTimer>
-#include "../../../libs/opmapcontrol/opmapcontrol.h"
+#include "opmapcontrol.h"
+
+// Choose one default map type
+//#define MAP_DEFAULT_TYPE_BING
+#define MAP_DEFAULT_TYPE_GOOGLE
+//#define MAP_DEFAULT_TYPE_OSM
 
 class UASInterface;
 class UASWaypointManager;
@@ -40,10 +45,16 @@ signals:
     void waypointChanged(Waypoint* wp);
 
 public slots:
+    /** @brief Action triggered when guided action is selected from the context menu */
+    void guidedActionTriggered();
+    /** @brief Action triggered when guided action is selected from the context menu, allows for altitude selection */
+    bool guidedAltActionTriggered();
+    /** @brief Action triggered when set home action is selected from the context menu. */
+    bool setHomeActionTriggered();
     /** @brief Add system to map view */
     void addUAS(UASInterface* uas);
     /** @brief Update the global position of a system */
-    void updateGlobalPosition(UASInterface* uas, double lat, double lon, double alt, quint64 usec);
+    void updateGlobalPosition(UASInterface* uas, double lat, double lon, double altAMSL, double altWGS84, quint64 usec);
     /** @brief Update the global position of all systems */
     void updateGlobalPosition();
     /** @brief Update the local position and draw it converted to GPS reference */
@@ -111,6 +122,11 @@ public slots:
         }
     }
 
+    void setZoomBlocked(bool blocked)
+    {
+        zoomBlocked = blocked;
+    }
+
     /** @brief Load the settings for this widget from disk */
     void loadSettings(bool changePosition=true);
     /** @brief Store the settings for this widget to disk */
@@ -126,9 +142,15 @@ protected:
     /** @brief Initialize */
     void showEvent(QShowEvent* event);
     void hideEvent(QHideEvent* event);
+    void wheelEvent(QWheelEvent* event);
+    void mousePressEvent(QMouseEvent *event);
+    void mouseReleaseEvent(QMouseEvent *event);
     void mouseDoubleClickEvent(QMouseEvent* event);
 
+    //void contextMenuEvent(QContextMenuEvent *);
+
     UASWaypointManager* currWPManager; ///< The current waypoint manager
+    bool offlineMode;
     QMap<Waypoint* , mapcontrol::WayPointItem*> waypointsToIcons;
     QMap<mapcontrol::WayPointItem*, Waypoint*> iconsToWaypoints;
     Waypoint* firingWaypointChange;
@@ -143,13 +165,19 @@ protected:
         EDIT_MODE_SAFE_AREA,
         EDIT_MODE_CACHING
     };
-    editMode currEditMode;            ///< The current edit mode on the map
+    editMode currEditMode;              ///< The current edit mode on the map
     bool followUAVEnabled;              ///< Does the map follow the UAV?
     mapcontrol::UAVTrailType::Types trailType; ///< Time or distance based trail dots
     float trailInterval;                ///< Time or distance between trail items
     int followUAVID;                    ///< Which UAV should be tracked?
     bool mapInitialized;                ///< Map initialized?
-
+    bool mapPositionInitialized;        ///< The position on the map has a reasonable value?
+    float homeAltitude;                 ///< Home altitude
+    QPoint mousePressPos;               ///< Mouse position when the button is released.
+    QPoint contextMousePressPos;        ///< Mouse position when context menu activated.
+    int defaultGuidedAlt;               ///< Default altitude for guided mode
+    bool zoomBlocked;                   ///< Wether zooming is blocked
+    UASInterface *uas;                  ///< Currently selected UAS.
 
 };
 

@@ -33,6 +33,16 @@ along with PIXHAWK. If not, see <http://www.gnu.org/licenses/>.
 #define _LINKINTERFACE_H_
 
 #include <QThread>
+#include <QDateTime>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QMetaType>
+#include <QSharedPointer>
+
+#include "QGCMAVLink.h"
+
+class LinkManager;
+class LinkConfiguration;
 
 /**
 * The link interface defines the interface for all links used to communicate
@@ -42,144 +52,83 @@ along with PIXHAWK. If not, see <http://www.gnu.org/licenses/>.
 class LinkInterface : public QThread
 {
     Q_OBJECT
+
+    // Only LinkManager is allowed to create/delete or _connect/_disconnect a link
+    friend class LinkManager;
+
 public:
-    LinkInterface(QObject* parent = 0) : QThread(parent) {}
-    virtual ~LinkInterface() { emit this->deleteLink(this); }
+    /**
+     * @brief Get link configuration (if used)
+     * @return A pointer to the instance of LinkConfiguration if supported. NULL otherwise.
+     **/
+    virtual LinkConfiguration* getLinkConfiguration() { return NULL; }
 
     /* Connection management */
 
     /**
-     * @brief Get the ID of this link
-     *
-     * The ID is an unsigned integer, starting at 0
-     * @return ID of this link
-     **/
-    virtual int getId() = 0;
-
-    /**
      * @brief Get the human readable name of this link
      */
-    virtual QString getName() = 0;
+    virtual QString getName() const = 0;
+
+    virtual void requestReset() = 0;
 
     /**
      * @brief Determine the connection status
      *
      * @return True if the connection is established, false otherwise
      **/
-    virtual bool isConnected() = 0;
+    virtual bool isConnected() const = 0;
 
     /* Connection characteristics */
 
     /**
-     * @Brief Get the nominal data rate of the interface.
+     * @Brief Get the maximum connection speed for this interface.
      *
      * The nominal data rate is the theoretical maximum data rate of the
      * interface. For 100Base-T Ethernet this would be 100 Mbit/s (100'000'000
      * Bit/s, NOT 104'857'600 Bit/s).
      *
      * @return The nominal data rate of the interface in bit per second, 0 if unknown
-     * @see getLongTermDataRate() For the mean data rate
-     * @see getShortTermDataRate() For a the mean data rate of the last seconds
-     * @see getCurrentDataRate() For the data rate of the last transferred chunk
-     * @see getMaxDataRate() For the maximum data rate
      **/
-    virtual qint64 getNominalDataRate() = 0;
+    virtual qint64 getConnectionSpeed() const = 0;
+    
+    /// @return true: This link is replaying a log file, false: Normal two-way communication link
+    virtual bool isLogReplay(void) { return false; }
 
     /**
-     * @brief Full duplex support of this interface.
+     * @Brief Get the current incoming data rate.
      *
-     * This method returns true if the interface supports full duplex, which implies
-     * the full datarate when sending and receiving data simultaneously.
+     * This should be over a short timespan, something like 100ms. A precise value isn't necessary,
+     * and this can be filtered, but should be a reasonable estimate of current data rate.
      *
-     * @return True if the interface supports full duplex, false otherwise
+     * @return The data rate of the interface in bits per second, 0 if unknown
      **/
-    virtual bool isFullDuplex() = 0;
+    qint64 getCurrentInputDataRate() const
+    {
+        return _getCurrentDataRate(_inDataIndex, _inDataWriteTimes, _inDataWriteAmounts);
+    }
 
     /**
-     * @brief Get the link quality.
+     * @Brief Get the current outgoing data rate.
      *
-     * The link quality is reported as percent, on a scale from 0 to 100% in 1% increments.
-     * If this feature is not supported by the interface, a call to this method return -1.
+     * This should be over a short timespan, something like 100ms. A precise value isn't necessary,
+     * and this can be filtered, but should be a reasonable estimate of current data rate.
      *
-     * @return The link quality in integer percent or -1 if not supported
+     * @return The data rate of the interface in bits per second, 0 if unknown
      **/
-    virtual int getLinkQuality() = 0;
+    qint64 getCurrentOutputDataRate() const
+    {
+        return _getCurrentDataRate(_outDataIndex, _outDataWriteTimes, _outDataWriteAmounts);
+    }
+    
+    /// mavlink channel to use for this link, as used by mavlink_parse_char. The mavlink channel is only
+    /// set into the link when it is added to LinkManager
+    uint8_t getMavlinkChannel(void) const { Q_ASSERT(_mavlinkChannelSet); return _mavlinkChannel; }
 
-    /**
-     * @Brief Get the long term (complete) mean of the data rate
-     *
-     * The mean of the total data rate. It is calculated as
-     * all transferred bits / total link uptime.
-     *
-     * @return The mean data rate of the interface in bit per second, 0 if unknown
-     * @see getNominalDataRate() For the nominal data rate of the interface
-     * @see getShortTermDataRate() For a the mean data rate of the last seconds
-     * @see getCurrentDataRate() For the data rate of the last transferred chunk
-     * @see getMaxDataRate() For the maximum data rate
-     **/
-    virtual qint64 getTotalUpstream() = 0;
-
-    /**
-     * @Brief Get the current data rate
-     *
-     * The datarate of the last 100 ms
-     *
-     * @return The mean data rate of the interface in bit per second, 0 if unknown
-     * @see getNominalDataRate() For the nominal data rate of the interface
-     * @see getLongTermDataRate() For the mean data rate
-     * @see getShortTermDataRate() For a the mean data rate of the last seconds
-     * @see getMaxDataRate() For the maximum data rate
-     **/
-    virtual qint64 getCurrentUpstream() = 0;
-
-    /**
-     * @Brief Get the maximum data rate
-     *
-     * The maximum peak data rate.
-     *
-     * @return The mean data rate of the interface in bit per second, 0 if unknown
-     * @see getNominalDataRate() For the nominal data rate of the interface
-     * @see getLongTermDataRate() For the mean data rate
-     * @see getShortTermDataRate() For a the mean data rate of the last seconds
-     * @see getCurrentDataRate() For the data rate of the last transferred chunk
-     **/
-    virtual qint64 getMaxUpstream() = 0;
-
-    /**
-     * @Brief Get the total number of bits sent
-     *
-     * @return The number of sent bits
-     **/
-    virtual qint64 getBitsSent() = 0;
-
-    /**
-     * @Brief Get the total number of bits received
-     *
-     * @return The number of received bits
-     * @bug Decide if the bits should be counted fromt the instantiation of the interface or if the counter should reset on disconnect.
-     **/
-    virtual qint64 getBitsReceived() = 0;
-
-    /**
-     * @brief Connect this interface logically
-     *
-     * @return True if connection could be established, false otherwise
-     **/
-    virtual bool connect() = 0;
-
-    /**
-     * @brief Disconnect this interface logically
-     *
-     * @return True if connection could be terminated, false otherwise
-     **/
-    virtual bool disconnect() = 0;
-
-    /**
-     * @brief Get the current number of bytes in buffer.
-     *
-     * @return The number of bytes ready to read
-     **/
-    virtual qint64 bytesAvailable() = 0;
+    // These are left unimplemented in order to cause linker errors which indicate incorrect usage of
+    // connect/disconnect on link directly. All connect/disconnect calls should be made through LinkManager.
+    bool connect(void);
+    bool disconnect(void);
 
 public slots:
 
@@ -194,7 +143,7 @@ public slots:
      * @param length The length of the data array
      **/
     virtual void writeBytes(const char *bytes, qint64 length) = 0;
-
+    
 signals:
 
     /**
@@ -220,27 +169,50 @@ signals:
     void disconnected();
 
     /**
-     * @brief This signal is emitted instantly when the link status changes
-     **/
-    void connected(bool connected);
-
-    /**
      * @brief This signal is emitted if the human readable name of this link changes
      */
     void nameChanged(QString name);
 
     /** @brief Communication error occured */
-    void communicationError(const QString& linkname, const QString& error);
+    void communicationError(const QString& title, const QString& error);
 
-	/** @brief destroying element */
-	void deleteLink(LinkInterface* const link);
+    void communicationUpdate(const QString& linkname, const QString& text);
 
 protected:
-    static int getNextLinkId() {
-        static int nextId = 1;
-        return nextId++;
+    // Links are only created by LinkManager so constructor is not public
+    LinkInterface() :
+        QThread(0),
+        _mavlinkChannelSet(false)
+    {
+        // Initialize everything for the data rate calculation buffers.
+        _inDataIndex  = 0;
+        _outDataIndex = 0;
+        
+        // Initialize our data rate buffers.
+        memset(_inDataWriteAmounts, 0, sizeof(_inDataWriteAmounts));
+        memset(_inDataWriteTimes,   0, sizeof(_inDataWriteTimes));
+        memset(_outDataWriteAmounts,0, sizeof(_outDataWriteAmounts));
+        memset(_outDataWriteTimes,  0, sizeof(_outDataWriteTimes));
+        
+        qRegisterMetaType<LinkInterface*>("LinkInterface*");
     }
 
+    /// This function logs the send times and amounts of datas for input. Data is used for calculating
+    /// the transmission rate.
+    ///     @param byteCount Number of bytes received
+    ///     @param time Time in ms send occured
+    void _logInputDataRate(quint64 byteCount, qint64 time) {
+        _logDataRateToBuffer(_inDataWriteAmounts, _inDataWriteTimes, &_inDataIndex, byteCount, time);
+    }
+    
+    /// This function logs the send times and amounts of datas for output. Data is used for calculating
+    /// the transmission rate.
+    ///     @param byteCount Number of bytes sent
+    ///     @param time Time in ms receive occured
+    void _logOutputDataRate(quint64 byteCount, qint64 time) {
+        _logDataRateToBuffer(_outDataWriteAmounts, _outDataWriteTimes, &_outDataIndex, byteCount, time);
+    }
+    
 protected slots:
 
     /**
@@ -251,9 +223,133 @@ protected slots:
      **/
     virtual void readBytes() = 0;
 
+private:
+    /**
+     * @brief logDataRateToBuffer Stores transmission times/amounts for statistics
+     *
+     * This function logs the send times and amounts of datas to the given circular buffers.
+     * This data is used for calculating the transmission rate.
+     *
+     * @param bytesBuffer[out] The buffer to write the bytes value into.
+     * @param timeBuffer[out] The buffer to write the time value into
+     * @param writeIndex[out] The write index used for this buffer.
+     * @param bytes The amount of bytes transmit.
+     * @param time The time (in ms) this transmission occurred.
+     */
+    void _logDataRateToBuffer(quint64 *bytesBuffer, qint64 *timeBuffer, int *writeIndex, quint64 bytes, qint64 time)
+    {
+        QMutexLocker dataRateLocker(&_dataRateMutex);
+        
+        int i = *writeIndex;
+
+        // Now write into the buffer, if there's no room, we just overwrite the first data point.
+        bytesBuffer[i] = bytes;
+        timeBuffer[i] = time;
+
+        // Increment and wrap the write index
+        ++i;
+        if (i == _dataRateBufferSize)
+        {
+            i = 0;
+        }
+        *writeIndex = i;
+    }
+
+    /**
+     * @brief getCurrentDataRate Get the current data rate given a data rate buffer.
+     *
+     * This function attempts to use the times and number of bytes transmit into a current data rate
+     * estimation. Since it needs to use timestamps to get the timeperiods over when the data was sent,
+     * this is effectively a global data rate over the last _dataRateBufferSize - 1 data points. Also note
+     * that data points older than NOW - dataRateCurrentTimespan are ignored.
+     *
+     * @param index The first valid sample in the data rate buffer. Refers to the oldest time sample.
+     * @param dataWriteTimes The time, in ms since epoch, that each data sample took place.
+     * @param dataWriteAmounts The amount of data (in bits) that was transferred.
+     * @return The bits per second of data transferrence of the interface over the last [-statsCurrentTimespan, 0] timespan.
+     */
+    qint64 _getCurrentDataRate(int index, const qint64 dataWriteTimes[], const quint64 dataWriteAmounts[]) const
+    {
+        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+
+        // Limit the time we calculate to the recent past
+        const qint64 cutoff = now - _dataRateCurrentTimespan;
+
+        // Grab the mutex for working with the stats variables
+        QMutexLocker dataRateLocker(&_dataRateMutex);
+
+        // Now iterate through the buffer of all received data packets adding up all values
+        // within now and our cutof.
+        qint64 totalBytes = 0;
+        qint64 totalTime = 0;
+        qint64 lastTime = 0;
+        int size = _dataRateBufferSize;
+        while (size-- > 0)
+        {
+            // If this data is within our cutoff time, include it in our calculations.
+            // This also accounts for when the buffer is empty and filled with 0-times.
+            if (dataWriteTimes[index] > cutoff && lastTime > 0) {
+                // Track the total time, using the previous time as our timeperiod.
+                totalTime += dataWriteTimes[index] - lastTime;
+                totalBytes += dataWriteAmounts[index];
+            }
+
+            // Track the last time sample for doing timespan calculations
+            lastTime = dataWriteTimes[index];
+
+            // Increment and wrap the index if necessary.
+            if (++index == _dataRateBufferSize)
+            {
+                index = 0;
+            }
+        }
+
+        // Return the final calculated value in bits / s, converted from bytes/ms.
+        qint64 dataRate = (totalTime != 0)?(qint64)((float)totalBytes * 8.0f / ((float)totalTime / 1000.0f)):0;
+
+        // Finally return our calculated data rate.
+        return dataRate;
+    }
+
+    /**
+     * @brief Connect this interface logically
+     *
+     * @return True if connection could be established, false otherwise
+     **/
+    virtual bool _connect(void) = 0;
+
+    /**
+     * @brief Disconnect this interface logically
+     *
+     * @return True if connection could be terminated, false otherwise
+     **/
+    virtual bool _disconnect(void) = 0;
+    
+    /// Sets the mavlink channel to use for this link
+    void _setMavlinkChannel(uint8_t channel) { Q_ASSERT(!_mavlinkChannelSet); _mavlinkChannelSet = true; _mavlinkChannel = channel; }
+    
+    bool _mavlinkChannelSet;    ///< true: _mavlinkChannel has been set
+    uint8_t _mavlinkChannel;    ///< mavlink channel to use for this link, as used by mavlink_parse_char
+    
+    static const int _dataRateBufferSize = 20; ///< Specify how many data points to capture for data rate calculations.
+    
+    static const qint64 _dataRateCurrentTimespan = 500; ///< Set the maximum age of samples to use for data calculations (ms).
+    
+    // Implement a simple circular buffer for storing when and how much data was received.
+    // Used for calculating the incoming data rate. Use with *StatsBuffer() functions.
+    int     _inDataIndex;
+    quint64 _inDataWriteAmounts[_dataRateBufferSize]; // In bytes
+    qint64  _inDataWriteTimes[_dataRateBufferSize]; // in ms
+    
+    // Implement a simple circular buffer for storing when and how much data was transmit.
+    // Used for calculating the outgoing data rate. Use with *StatsBuffer() functions.
+    int     _outDataIndex;
+    quint64 _outDataWriteAmounts[_dataRateBufferSize]; // In bytes
+    qint64  _outDataWriteTimes[_dataRateBufferSize]; // in ms
+    
+    mutable QMutex _dataRateMutex; // Mutex for accessing the data rate member variables
 };
 
-/* Declare C++ interface as Qt interface */
-//Q_DECLARE_INTERFACE(LinkInterface, "org.openground.comm.links.LinkInterface/1.0")
+typedef QSharedPointer<LinkInterface> SharedLinkInterface;
 
 #endif // _LINKINTERFACE_H_

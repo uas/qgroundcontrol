@@ -37,19 +37,17 @@ This file is part of the QGROUNDCONTROL project
 #include <QFile>
 #include <QMap>
 #include <QByteArray>
-#include "ProtocolInterface.h"
+#include <QLoggingCategory>
+
 #include "LinkInterface.h"
 #include "QGCMAVLink.h"
 #include "QGC.h"
+#include "QGCTemporaryFile.h"
+#include "QGCSingleton.h"
 
-#if defined(QGC_PROTOBUF_ENABLED)
-#include <tr1/memory>
-#include <google/protobuf/message.h>
-#if defined(QGC_USE_PIXHAWK_MESSAGES)
-#include <mavlink_protobuf_manager.hpp>
-#endif
-#endif
+class LinkManager;
 
+Q_DECLARE_LOGGING_CATEGORY(MAVLinkProtocolLog)
 
 /**
  * @brief MAVLink micro air vehicle protocol reference implementation.
@@ -58,14 +56,13 @@ This file is part of the QGROUNDCONTROL project
  * for more information, please see the official website.
  * @ref http://pixhawk.ethz.ch/software/mavlink/
  **/
-class MAVLinkProtocol : public ProtocolInterface
+class MAVLinkProtocol : public QGCSingleton
 {
     Q_OBJECT
+    
+    DECLARE_QGC_SINGLETON(MAVLinkProtocol, MAVLinkProtocol)
 
 public:
-    MAVLinkProtocol();
-    ~MAVLinkProtocol();
-
     /** @brief Get the human-friendly name of this protocol */
     QString getName();
     /** @brief Get the system id of this application */
@@ -76,12 +73,9 @@ public:
     int getHeartbeatRate();
     /** @brief Get heartbeat state */
     bool heartbeatsEnabled() const {
-        return m_heartbeatsEnabled;
+        return _heartbeatsEnabled;
     }
-    /** @brief Get logging state */
-    bool loggingEnabled() const {
-        return m_loggingEnabled;
-    }
+    
     /** @brief Get protocol version check state */
     bool versionCheckEnabled() const {
         return m_enable_version_check;
@@ -102,8 +96,6 @@ public:
     QString getAuthKey() {
         return m_authKey;
     }
-    /** @brief Get the name of the packet log file */
-    QString getLogfileName();
     /** @brief Get state of parameter retransmission */
     bool paramGuardEnabled() {
         return m_paramGuardEnabled;
@@ -124,10 +116,42 @@ public:
     int getActionRetransmissionTimeout() {
         return m_actionRetransmissionTimeout;
     }
+    /**
+     * Retrieve a total of all successfully parsed packets for the specified link.
+     * @returns -1 if this is not available for this protocol, # of packets otherwise.
+     */
+    qint32 getReceivedPacketCount(const LinkInterface *link) const {
+        return totalReceiveCounter[link->getMavlinkChannel()];
+    }
+    /**
+     * Retrieve a total of all parsing errors for the specified link.
+     * @returns -1 if this is not available for this protocol, # of errors otherwise.
+     */
+    qint32 getParsingErrorCount(const LinkInterface *link) const {
+        return totalErrorCounter[link->getMavlinkChannel()];
+    }
+    /**
+     * Retrieve a total of all dropped packets for the specified link.
+     * @returns -1 if this is not available for this protocol, # of packets otherwise.
+     */
+    qint32 getDroppedPacketCount(const LinkInterface *link) const {
+        return totalLossCounter[link->getMavlinkChannel()];
+    }
+    /**
+     * Reset the counters for all metadata for this link.
+     */
+    virtual void resetMetadataForLink(const LinkInterface *link);
+    
+    /// Suspend/Restart logging during replay.
+    void suspendLogForReplay(bool suspend);
 
 public slots:
     /** @brief Receive bytes from a communication interface */
     void receiveBytes(LinkInterface* link, QByteArray b);
+    
+    void linkConnected(void);
+    void linkDisconnected(void);
+    
     /** @brief Send MAVLink message through serial interface */
     void sendMessage(mavlink_message_t message);
     /** @brief Send MAVLink message */
@@ -141,9 +165,6 @@ public slots:
 
     /** @brief Enable / disable the heartbeat emission */
     void enableHeartbeats(bool enabled);
-
-    /** @brief Enable/disable binary packet logging */
-    void enableLogging(bool enabled);
 
     /** @brief Enabled/disable packet multiplexing */
     void enableMultiplexing(bool enabled);
@@ -163,9 +184,6 @@ public slots:
     /** @brief Set parameter read timeout */
     void setActionRetransmissionTimeout(int ms);
 
-    /** @brief Set log file name */
-    void setLogfileName(const QString& filename);
-
     /** @brief Enable / disable version check */
     void enableVersionCheck(bool enabled);
 
@@ -184,45 +202,38 @@ public slots:
     void loadSettings();
     /** @brief Store protocol settings */
     void storeSettings();
+    
+    /// @brief Deletes any log files which are in the temp directory
+    static void deleteTempLogFiles(void);
+    
+    /// Checks for lost log files
+    void checkForLostLogFiles(void);
 
 protected:
-    QTimer* heartbeatTimer;    ///< Timer to emit heartbeats
-    int heartbeatRate;         ///< Heartbeat rate, controls the timer interval
-    bool m_heartbeatsEnabled;  ///< Enabled/disable heartbeat emission
     bool m_multiplexingEnabled; ///< Enable/disable packet multiplexing
     bool m_authEnabled;        ///< Enable authentication token broadcast
     QString m_authKey;         ///< Authentication key
-    bool m_loggingEnabled;     ///< Enable/disable packet logging
-    QFile* m_logfile;           ///< Logfile
     bool m_enable_version_check; ///< Enable checking of version match of MAV and QGC
     int m_paramRetransmissionTimeout; ///< Timeout for parameter retransmission
     int m_paramRewriteTimeout;    ///< Timeout for sending re-write request
     bool m_paramGuardEnabled;       ///< Parameter retransmission/rewrite enabled
     bool m_actionGuardEnabled;       ///< Action request retransmission enabled
     int m_actionRetransmissionTimeout; ///< Timeout for parameter retransmission
-    QMutex receiveMutex;       ///< Mutex to protect receiveBytes function
-    int lastIndex[256][256];	///< Store the last received sequence ID for each system/componenet pair
-    int totalReceiveCounter;
-    int totalLossCounter;
-    int currReceiveCounter;
-    int currLossCounter;
+    QMutex receiveMutex;        ///< Mutex to protect receiveBytes function
+    int lastIndex[256][256];    ///< Store the last received sequence ID for each system/componenet pair
+    int totalReceiveCounter[MAVLINK_COMM_NUM_BUFFERS];    ///< The total number of successfully received messages
+    int totalLossCounter[MAVLINK_COMM_NUM_BUFFERS];       ///< Total messages lost during transmission.
+    int totalErrorCounter[MAVLINK_COMM_NUM_BUFFERS];      ///< Total count of all parsing errors. Generally <= totalLossCounter.
+    int currReceiveCounter[MAVLINK_COMM_NUM_BUFFERS];     ///< Received messages during this sample time window. Used for calculating loss %.
+    int currLossCounter[MAVLINK_COMM_NUM_BUFFERS];        ///< Lost messages during this sample time window. Used for calculating loss %.
     bool versionMismatchIgnore;
     int systemId;
-#if defined(QGC_PROTOBUF_ENABLED) && defined(QGC_USE_PIXHAWK_MESSAGES)
-    mavlink::ProtobufManager protobufManager;
-#endif
 
 signals:
     /** @brief Message received and directly copied via signal */
     void messageReceived(LinkInterface* link, mavlink_message_t message);
-#if defined(QGC_PROTOBUF_ENABLED)
-    /** @brief Message received via signal */
-    void extendedMessageReceived(LinkInterface *link, std::tr1::shared_ptr<google::protobuf::Message> message);
-#endif
     /** @brief Emitted if heartbeat emission mode is changed */
     void heartbeatChanged(bool heartbeats);
-    /** @brief Emitted if logging is started / stopped */
-    void loggingChanged(bool enabled);
     /** @brief Emitted if multiplexing is started / stopped */
     void multiplexingChanged(bool enabled);
     /** @brief Emitted if authentication support is enabled / disabled */
@@ -243,8 +254,55 @@ signals:
     void paramRewriteTimeoutChanged(int ms);
     /** @brief Emitted if action guard status changed */
     void actionGuardChanged(bool enabled);
-    /** @brief Emitted if actiion request timeout changed */
+    /** @brief Emitted if action request timeout changed */
     void actionRetransmissionTimeoutChanged(int ms);
+    /** @brief Update the packet loss from one system */
+    void receiveLossChanged(int uasId, float loss);
+
+    /**
+     * @brief Emitted if a new radio status packet received
+     *
+     * @param rxerrors receive errors
+     * @param fixed count of error corrected packets
+     * @param rssi local signal strength
+     * @param remrssi remote signal strength
+     * @param txbuf how full the tx buffer is as a percentage
+     * @param noise background noise level
+     * @param remnoise remote background noise level
+     */
+    void radioStatusChanged(LinkInterface* link, unsigned rxerrors, unsigned fixed, unsigned rssi, unsigned remrssi,
+    unsigned txbuf, unsigned noise, unsigned remnoise);
+    
+    /// @brief Emitted when a temporary log file is ready for saving
+    void saveTempFlightDataLog(QString tempLogfile);
+    
+private:
+    MAVLinkProtocol(QObject* parent = NULL);
+    ~MAVLinkProtocol();
+
+    void _linkStatusChanged(LinkInterface* link, bool connected);
+    bool _closeLogFile(void);
+    void _startLogging(void);
+    void _stopLogging(void);
+    
+    /// List of all links connected to protocol. We keep SharedLinkInterface objects
+    /// which are QSharedPointer's in order to maintain reference counts across threads.
+    /// This way Link deletion works correctly.
+    QList<SharedLinkInterface> _connectedLinks;
+    
+    bool _logSuspendError;      ///< true: Logging suspended due to error
+    bool _logSuspendReplay;     ///< true: Logging suspended due to replay
+    bool _logWasArmed;          ///< true: vehicle was armed during logging
+    
+    QGCTemporaryFile    _tempLogFile;            ///< File to log to
+    static const char*  _tempLogFileTemplate;    ///< Template for temporary log file
+    static const char*  _logFileExtension;       ///< Extension for log files
+    
+    LinkManager* _linkMgr;
+    
+    QTimer  _heartbeatTimer;    ///< Timer to emit heartbeats
+    int     _heartbeatRate;     ///< Heartbeat rate, controls the timer interval
+    bool    _heartbeatsEnabled; ///< Enabled/disable heartbeat emission
 };
 
 #endif // MAVLINKPROTOCOL_H_

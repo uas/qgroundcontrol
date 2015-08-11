@@ -28,26 +28,28 @@ This file is part of the QGROUNDCONTROL project
  *
  */
 
-#include <QFileDialog>
 #include <QTemporaryFile>
-#include <QMessageBox>
+#ifndef __mobile__
 #include <QPrintDialog>
+#include <QPrinter>
+#endif
 #include <QProgressDialog>
 #include <QHBoxLayout>
 #include <QSvgGenerator>
-#include <QPrinter>
-#include <QDesktopServices>
+#include <QStandardPaths>
+#include <QDebug>
+
+#include <cmath>
+
 #include "QGCDataPlot2D.h"
 #include "ui_QGCDataPlot2D.h"
 #include "MG.h"
-#include "MainWindow.h"
-#include <cmath>
-
-#include <QDebug>
+#include "QGCFileDialog.h"
+#include "QGCMessageBox.h"
 
 QGCDataPlot2D::QGCDataPlot2D(QWidget *parent) :
     QWidget(parent),
-    plot(new IncrementalPlot()),
+    plot(new IncrementalPlot(parent)),
     logFile(NULL),
     ui(new Ui::QGCDataPlot2D)
 {
@@ -70,6 +72,9 @@ QGCDataPlot2D::QGCDataPlot2D(QWidget *parent) :
     connect(ui->gridCheckBox, SIGNAL(clicked(bool)), plot, SLOT(showGrid(bool)));
     connect(ui->regressionButton, SIGNAL(clicked()), this, SLOT(calculateRegression()));
     connect(ui->style, SIGNAL(currentIndexChanged(QString)), plot, SLOT(setStyleText(QString)));
+
+    // Allow style changes to propagate through this widget
+    connect(qgcApp(), &QGCApplication::styleChanged, plot, &IncrementalPlot::styleChanged);
 }
 
 void QGCDataPlot2D::reloadFile()
@@ -97,43 +102,55 @@ void QGCDataPlot2D::loadFile()
 
 void QGCDataPlot2D::loadFile(QString file)
 {
+    // TODO This "filename" is a private/protected member variable. It should be named in such way
+    // it indicates so. This same name is used in several places within this file in local scopes.
     fileName = file;
-    if (QFileInfo(fileName).isReadable()) {
-        if (fileName.contains(".raw") || fileName.contains(".imu")) {
+    QFileInfo fi(fileName);
+    if (fi.isReadable()) {
+        if (fi.suffix() == QString("raw") || fi.suffix() == QString("imu")) {
             loadRawLog(fileName);
-        } else if (fileName.contains(".txt") || fileName.contains(".csv") || fileName.contains(".csv")) {
+        } else if (fi.suffix() == QString("txt") || fi.suffix() == QString("csv")) {
             loadCsvLog(fileName);
         }
+        // TODO Else, tell the user it doesn't know what to do with the file...
     }
 }
 
 /**
- * This function brings up a file name dialog and exports to either PDF or SVG, depending on the filename
+ * This function brings up a file name dialog and asks the user to enter a file to save to
+ */
+QString QGCDataPlot2D::getSavePlotFilename()
+{
+    QString fileName = QGCFileDialog::getSaveFileName(
+        this, "Save Plot File", QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
+        "PDF Documents (*.pdf);;SVG Images (*.svg)",
+        "pdf");
+    return fileName;
+}
+
+/**
+ * This function aks the user for a filename and exports to either PDF or SVG, depending on the filename
  */
 void QGCDataPlot2D::savePlot()
 {
-    QString fileName = "plot.svg";
-    fileName = QFileDialog::getSaveFileName(
-                   this, "Export File Name", QDesktopServices::storageLocation(QDesktopServices::DesktopLocation),
-                   "PDF Documents (*.pdf);;SVG Images (*.svg)");
-
-    if (!fileName.contains(".")) {
-        // .pdf is default extension
-        fileName.append(".pdf");
-    }
+    QString fileName = getSavePlotFilename();
+    if (fileName.isEmpty())
+        return;
 
     while(!(fileName.endsWith(".svg") || fileName.endsWith(".pdf"))) {
-        QMessageBox msgBox;
-        msgBox.setIcon(QMessageBox::Critical);
-        msgBox.setText("Unsuitable file extension for PDF or SVG");
-        msgBox.setInformativeText("Please choose .pdf or .svg as file extension. Click OK to change the file extension, cancel to not save the file.");
-        msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-        msgBox.setDefaultButton(QMessageBox::Ok);
+        QMessageBox::StandardButton button = QGCMessageBox::warning(
+            tr("Unsuitable file extension for Plot document type."),
+            tr("Please choose .pdf or .svg as file extension. Click OK to change the file extension, cancel to not save the file."),
+            QMessageBox::Ok | QMessageBox::Cancel,
+            QMessageBox::Ok);
         // Abort if cancelled
-        if(msgBox.exec() == QMessageBox::Cancel) return;
-        fileName = QFileDialog::getSaveFileName(
-                       this, "Export File Name", QDesktopServices::storageLocation(QDesktopServices::DesktopLocation),
-                       "PDF Documents (*.pdf);;SVG Images (*.svg)");
+        if (button == QMessageBox::Cancel) {
+            return;
+        }
+
+        fileName = getSavePlotFilename();
+        if (fileName.isEmpty())
+            return; //Abort if cancelled
     }
 
     if (fileName.endsWith(".pdf")) {
@@ -146,6 +163,7 @@ void QGCDataPlot2D::savePlot()
 
 void QGCDataPlot2D::print()
 {
+#ifndef __mobile__
     QPrinter printer(QPrinter::HighResolution);
     //    printer.setOutputFormat(QPrinter::PdfFormat);
     //    //QPrinter printer(QPrinter::HighResolution);
@@ -164,26 +182,31 @@ void QGCDataPlot2D::print()
     if ( dialog.exec() ) {
         plot->setStyleSheet("QWidget { background-color: #FFFFFF; color: #000000; background-clip: border; font-size: 10pt;}");
         plot->setCanvasBackground(Qt::white);
-        QwtPlotPrintFilter filter;
-        filter.color(Qt::white, QwtPlotPrintFilter::CanvasBackground);
-        filter.color(Qt::black, QwtPlotPrintFilter::AxisScale);
-        filter.color(Qt::black, QwtPlotPrintFilter::AxisTitle);
-        filter.color(Qt::black, QwtPlotPrintFilter::MajorGrid);
-        filter.color(Qt::black, QwtPlotPrintFilter::MinorGrid);
-        if ( printer.colorMode() == QPrinter::GrayScale ) {
-            int options = QwtPlotPrintFilter::PrintAll;
-            options &= ~QwtPlotPrintFilter::PrintBackground;
-            options |= QwtPlotPrintFilter::PrintFrameWithScales;
-            filter.setOptions(options);
-        }
-        plot->print(printer, filter);
+        // FIXME: QwtPlotPrintFilter no longer exists in Qwt 6.1
+        //QwtPlotPrintFilter filter;
+        //filter.color(Qt::white, QwtPlotPrintFilter::CanvasBackground);
+        //filter.color(Qt::black, QwtPlotPrintFilter::AxisScale);
+        //filter.color(Qt::black, QwtPlotPrintFilter::AxisTitle);
+        //filter.color(Qt::black, QwtPlotPrintFilter::MajorGrid);
+        //filter.color(Qt::black, QwtPlotPrintFilter::MinorGrid);
+        //if ( printer.colorMode() == QPrinter::GrayScale ) {
+        //    int options = QwtPlotPrintFilter::PrintAll;
+        //    options &= ~QwtPlotPrintFilter::PrintBackground;
+        //    options |= QwtPlotPrintFilter::PrintFrameWithScales;
+        //    filter.setOptions(options);
+        //}
+        //plot->print(printer);
         plot->setStyleSheet("QWidget { background-color: #050508; color: #DDDDDF; background-clip: border; font-size: 11pt;}");
         //plot->setCanvasBackground(QColor(5, 5, 8));
     }
+#endif
 }
 
 void QGCDataPlot2D::exportPDF(QString fileName)
 {
+#ifdef __mobile__
+    Q_UNUSED(fileName)
+#else
     QPrinter printer;
     printer.setOutputFormat(QPrinter::PdfFormat);
     printer.setOutputFileName(fileName);
@@ -202,6 +225,7 @@ void QGCDataPlot2D::exportPDF(QString fileName)
 
     plot->setStyleSheet("QWidget { background-color: #FFFFFF; color: #000000; background-clip: border; font-size: 10pt;}");
     //        plot->setCanvasBackground(Qt::white);
+    // FIXME: QwtPlotPrintFilter no longer exists in Qwt 6.1
     //        QwtPlotPrintFilter filter;
     //        filter.color(Qt::white, QwtPlotPrintFilter::CanvasBackground);
     //        filter.color(Qt::black, QwtPlotPrintFilter::AxisScale);
@@ -215,13 +239,17 @@ void QGCDataPlot2D::exportPDF(QString fileName)
     //            options |= QwtPlotPrintFilter::PrintFrameWithScales;
     //            filter.setOptions(options);
     //        }
-    plot->print(printer);//, filter);
+    //plot->print(printer);
     plot->setStyleSheet("QWidget { background-color: #050508; color: #DDDDDF; background-clip: border; font-size: 11pt;}");
     //plot->setCanvasBackground(QColor(5, 5, 8));
+#endif
 }
 
 void QGCDataPlot2D::exportSVG(QString fileName)
 {
+#ifdef __mobile__
+    Q_UNUSED(fileName)
+#else
     if ( !fileName.isEmpty() ) {
         plot->setStyleSheet("QWidget { background-color: #FFFFFF; color: #000000; background-clip: border; font-size: 10pt;}");
         //plot->setCanvasBackground(Qt::white);
@@ -229,16 +257,18 @@ void QGCDataPlot2D::exportSVG(QString fileName)
         generator.setFileName(fileName);
         generator.setSize(QSize(800, 600));
 
-        QwtPlotPrintFilter filter;
-        filter.color(Qt::white, QwtPlotPrintFilter::CanvasBackground);
-        filter.color(Qt::black, QwtPlotPrintFilter::AxisScale);
-        filter.color(Qt::black, QwtPlotPrintFilter::AxisTitle);
-        filter.color(Qt::black, QwtPlotPrintFilter::MajorGrid);
-        filter.color(Qt::black, QwtPlotPrintFilter::MinorGrid);
+        // FIXME: QwtPlotPrintFilter no longer exists in Qwt 6.1
+        //QwtPlotPrintFilter filter;
+        //filter.color(Qt::white, QwtPlotPrintFilter::CanvasBackground);
+        //filter.color(Qt::black, QwtPlotPrintFilter::AxisScale);
+        //filter.color(Qt::black, QwtPlotPrintFilter::AxisTitle);
+        //filter.color(Qt::black, QwtPlotPrintFilter::MajorGrid);
+        //filter.color(Qt::black, QwtPlotPrintFilter::MinorGrid);
 
-        plot->print(generator, filter);
+        //plot->print(generator);
         plot->setStyleSheet("QWidget { background-color: #050508; color: #DDDDDF; background-clip: border; font-size: 11pt;}");
     }
+#endif
 }
 
 /**
@@ -246,38 +276,35 @@ void QGCDataPlot2D::exportSVG(QString fileName)
  */
 void QGCDataPlot2D::selectFile()
 {
-	// Open a file dialog prompting the user for the file to load.
-	// Note the special case for the Pixhawk.
+    // Open a file dialog prompting the user for the file to load.
+    // Note the special case for the Pixhawk.
     if (ui->inputFileType->currentText().contains("pxIMU") || ui->inputFileType->currentText().contains("RAW")) {
-        fileName = QFileDialog::getOpenFileName(this, tr("Specify log file name"), QString(), "Logfile (*.imu *.raw)");
-	}
-	else
-	{
-        fileName = QFileDialog::getOpenFileName(this, tr("Specify log file name"), QString(), "Logfile (*.csv *.txt *.log)");
+        fileName = QGCFileDialog::getOpenFileName(this, tr("Load Log File"), QString(), "Log Files (*.imu *.raw)");
+    }
+    else
+    {
+        fileName = QGCFileDialog::getOpenFileName(this, tr("Load Log File"), QString(), "Log Files (*.csv);;All Files (*)");
     }
 
-	// Check if the user hit cancel, which results in a Null string.
-	// If this is the case, we just stop.
-	if (fileName.isNull())
-	{
-		return;
-	}
+    // Check if the user hit cancel, which results in an empty string.
+    // If this is the case, we just stop.
+    if (fileName.isEmpty())
+    {
+        return;
+    }
 
-	// Now attempt to open the file
+    // Now attempt to open the file
     QFileInfo fileInfo(fileName);
     if (!fileInfo.isReadable())
-	{
-        QMessageBox msgBox;
-        msgBox.setIcon(QMessageBox::Critical);
-        msgBox.setText("Could not open file");
-        msgBox.setInformativeText(tr("The file is owned by user %1. Is the file currently used by another program?").arg(fileInfo.owner()));
-        msgBox.setStandardButtons(QMessageBox::Ok);
-        msgBox.setDefaultButton(QMessageBox::Ok);
-        msgBox.exec();
-        ui->filenameLabel->setText(tr("Could not open %1").arg(fileInfo.baseName()+"."+fileInfo.completeSuffix()));
+    {
+        // TODO This needs some TLC. File used by another program sounds like a Windows only issue.
+        QGCMessageBox::critical(
+            tr("Could not open file"),
+            tr("The file is owned by user %1. Is the file currently used by another program?").arg(fileInfo.owner()));
+        ui->filenameLabel->setText(tr("Could not open %1").arg(fileInfo.fileName()));
     }
-	else
-	{
+    else
+    {
         ui->filenameLabel->setText(tr("Opened %1").arg(fileInfo.completeBaseName()+"."+fileInfo.completeSuffix()));
         // Open and import the file
         loadFile();
@@ -297,7 +324,6 @@ void QGCDataPlot2D::loadRawLog(QString file, QString xAxisName, QString yAxisFil
     // Postprocess log file
     logFile = new QTemporaryFile("qt_qgc_temp_log.XXXXXX.csv");
     compressor = new LogCompressor(file, logFile->fileName());
-    connect(compressor, SIGNAL(logProcessingStatusChanged(QString)), MainWindow::instance(), SLOT(showStatusMessage(QString)));
     connect(compressor, SIGNAL(finishedFile(QString)), this, SLOT(loadFile(QString)));
     compressor->startCompression();
 }
@@ -561,7 +587,7 @@ void QGCDataPlot2D::loadCsvLog(QString file, QString xAxisName, QString yAxisFil
 bool QGCDataPlot2D::calculateRegression()
 {
     // TODO: Add support for quadratic / cubic curve fitting
-	return calculateRegression(ui->xRegressionComboBox->currentText(), ui->yRegressionComboBox->currentText(), "linear");
+    return calculateRegression(ui->xRegressionComboBox->currentText(), ui->yRegressionComboBox->currentText(), "linear");
 }
 
 /**
@@ -580,14 +606,14 @@ bool QGCDataPlot2D::calculateRegression(QString xName, QString yName, QString me
             ui->yRegressionComboBox->setCurrentIndex(curveNames.indexOf(yName));
         }
 
-		// Create a couple of arrays for us to use to temporarily store some of the data from the plot.
-		// These arrays are allocated on the heap as they are far too big to go in the stack and will
-		// cause an overflow.
-		// TODO: Look into if this would be better done by having a getter return const double pointers instead
-		// of using memcpy().
+        // Create a couple of arrays for us to use to temporarily store some of the data from the plot.
+        // These arrays are allocated on the heap as they are far too big to go in the stack and will
+        // cause an overflow.
+        // TODO: Look into if this would be better done by having a getter return const double pointers instead
+        // of using memcpy().
         const int size = 100000;
-		double *x = new double[size];
-		double *y = new double[size];
+        double *x = new double[size];
+        double *y = new double[size];
         int copied = plot->data(yName, x, y, size);
 
         if (method == "linear") {
@@ -604,8 +630,8 @@ bool QGCDataPlot2D::calculateRegression(QString xName, QString yName, QString me
                 plot->setStyleText("lines");
                 // x-value of the current rightmost x position in the plot
                 plot->appendData(tr("regression %1-%2").arg(xName, yName), plot->invTransform(QwtPlot::xBottom, plot->width() - plot->width()*0.08f), (a + b*plot->invTransform(QwtPlot::xBottom, plot->width() - plot->width() * 0.08f)));
-                
-				result = true;
+
+                result = true;
             } else {
                 function = tr("Linear regression failed. (Limit: %1 data points. Try with less)").arg(size);
             }
@@ -681,39 +707,19 @@ bool QGCDataPlot2D::linearRegression(double *x, double *y, int n, double *a, dou
 
 void QGCDataPlot2D::saveCsvLog()
 {
-    QString fileName = "export.csv";
-    fileName = QFileDialog::getSaveFileName(
-                   this, "Export CSV File Name", QDesktopServices::storageLocation(QDesktopServices::DesktopLocation),
-                   "CSV file (*.csv);;Text file (*.txt)");
+    QString fileName = QGCFileDialog::getSaveFileName(
+        this, "Save CSV Log File", QStandardPaths::writableLocation(QStandardPaths::DesktopLocation),
+        "CSV Files (*.csv)",
+        "csv",
+        true);
 
-    if (!fileName.contains(".")) {
-        // .csv is default extension
-        fileName.append(".csv");
+    if (fileName.isEmpty()) {
+        return; //User cancelled
     }
-
-    //    QFileInfo fileInfo(fileName);
-    //
-    //    // Check if we could create a new file in this directory
-    //    QDir dir(fileInfo.absoluteDir());
-    //    QFileInfo dirInfo(dir);
-    //
-    //    while(!(dirInfo.isWritable()))
-    //    {
-    //        QMessageBox msgBox;
-    //        msgBox.setIcon(QMessageBox::Critical);
-    //        msgBox.setText("File cannot be written, Operating System denies permission");
-    //        msgBox.setInformativeText("Please choose a different file name or directory. Click OK to change the file, cancel to not save the file.");
-    //        msgBox.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-    //        msgBox.setDefaultButton(QMessageBox::Ok);
-    //        if(msgBox.exec() == QMessageBox::Cancel) break;
-    //        fileName = QFileDialog::getSaveFileName(
-    //                this, "Export CSV File Name", QDesktopServices::storageLocation(QDesktopServices::DesktopLocation),
-    //            "CSV file (*.csv);;Text file (*.txt)");
-    //    }
 
     bool success = logFile->copy(fileName);
 
-    qDebug() << "Saved CSV log. Success: " << success;
+    qDebug() << "Saved CSV log (" << fileName << "). Success: " << success;
 
     //qDebug() << "READE TO SAVE CSV LOG TO " << fileName;
 }

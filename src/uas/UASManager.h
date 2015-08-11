@@ -31,12 +31,16 @@ This file is part of the QGROUNDCONTROL project
 #ifndef _UASMANAGER_H_
 #define _UASMANAGER_H_
 
-#include <QThread>
+#include "UASManagerInterface.h"
+#include "UASInterface.h"
+
 #include <QList>
 #include <QMutex>
-#include <UASInterface.h>
-#include "../../libs/eigen/Eigen/Eigen"
+
+#include <Eigen/Eigen>
+
 #include "QGCGeo.h"
+#include "QGCSingleton.h"
 
 /**
  * @brief Central manager for all connected aerial vehicles
@@ -44,20 +48,25 @@ This file is part of the QGROUNDCONTROL project
  * This class keeps a list of all connected / configured UASs. It also stores which
  * UAS is currently select with respect to user input or manual controls.
  **/
-class UASManager : public QObject
+class UASManager : public UASManagerInterface
 {
     Q_OBJECT
+    
+    DECLARE_QGC_SINGLETON(UASManager, UASManagerInterface)
 
 public:
-    static UASManager* instance();
-    ~UASManager();
-
     /**
      * @brief Get the currently selected UAS
      *
      * @return NULL pointer if no UAS exists, active UAS else
      **/
     UASInterface* getActiveUAS();
+    /**
+     * @brief getActiveUASWaypointManager
+     * @return uas->getUASWaypointManager(), or if not connected, a singleton instance of a UASWaypointManager.
+     */
+    UASWaypointManager *getActiveUASWaypointManager();
+
     UASInterface* silentGetActiveUAS();
     /**
      * @brief Get the UAS with this id
@@ -145,12 +154,12 @@ public slots:
      **/
     void addUAS(UASInterface* UAS);
 
-    /** @brief Remove a system from the list */
-    void removeUAS(QObject* uas);
+    /** @brief Remove a system from the list. If this is the active UAS, it switches to another one calling setActiveUAS. Also triggers the UAS to kill itself. */
+    void removeUAS(UASInterface* uas);
 
 
     /**
-      * @brief Set a UAS as currently selected
+      * @brief Set a UAS as currently selected. NULL is a valid value for when no other valid UAS's are available.
       *
       * @param UAS Unmanned Air System to set
       **/
@@ -215,18 +224,14 @@ public slots:
      */
     bool killActiveUAS();
 
-    /**
-     * @brief Configure the currently active UAS
-     *
-     * This command will bring up the configuration dialog for the particular UAS.
-     */
-    void configureActiveUAS();
-
     /** @brief Shut down the onboard operating system down */
     bool shutdownActiveUAS();
 
-    /** @brief Set the current home position on all UAVs*/
+    /** @brief Set the current home position, but do not change it on the UAVs */
     bool setHomePosition(double lat, double lon, double alt);
+
+    /** @brief Set the current home position on all UAVs*/
+    bool setHomePositionAndNotify(double lat, double lon, double alt);
 
     /** @brief Set the safety limits in local position frame */
     void setLocalNEDSafetyBorders(double x1, double y1, double z1, double x2, double y2, double z2);
@@ -238,12 +243,14 @@ public slots:
     void loadSettings();
     /** @brief Store settings */
     void storeSettings();
+    
+    void _shutdown(void);
 
 
 protected:
-    UASManager();
     QList<UASInterface*> systems;
     UASInterface* activeUAS;
+    UASWaypointManager *offlineUASWaypointManager;
     QMutex activeUASMutex;
     double homeLat;
     double homeLon;
@@ -255,25 +262,12 @@ protected:
     Eigen::Vector3d nedSafetyLimitPosition2;
 
     void initReference(const double & latitude, const double & longitude, const double & altitude);
+    
+private:
+    /// @brief All access to UASManager singleton is through UASManager::instance
+    UASManager(QObject* parent = NULL);
+    ~UASManager();
 
-signals:
-
-    /** A new system was created */
-    void UASCreated(UASInterface* UAS);
-    /** A system was deleted */
-    void UASDeleted(UASInterface* UAS);
-    /** @brief The UAS currently under main operator control changed */
-    void activeUASSet(UASInterface* UAS);
-    /** @brief The UAS currently under main operator control changed */
-    void activeUASSet(int systemId);
-    /** @brief The UAS currently under main operator control changed */
-    void activeUASSetListIndex(int listIndex);
-    /** @brief The UAS currently under main operator control changed */
-    void activeUASStatusChanged(UASInterface* UAS, bool active);
-    /** @brief The UAS currently under main operator control changed */
-    void activeUASStatusChanged(int systemId, bool active);
-    /** @brief Current home position changed */
-    void homePositionChanged(double lat, double lon, double alt);
 public:
     /* Need to align struct pointer to prevent a memory assertion:
      * See http://eigen.tuxfamily.org/dox-devel/TopicUnalignedArrayAssert.html

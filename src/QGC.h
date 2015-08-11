@@ -28,18 +28,19 @@
 #include <QColor>
 #include <QThread>
 
-#include "configuration.h"
+#include "QGCConfig.h"
 
 
 /* Windows fixes */
 #ifdef _MSC_VER
+#if (_MSC_VER < 1800)	/* only PRIOR to Visual Studio 2013 */
 /* Needed define for Eigen */
 //#define NOMINMAX
 #include <limits>
 template<typename T>
 inline bool isnan(T value)
 {
-    return value != value;
+	return value != value;
 
 }
 
@@ -47,9 +48,10 @@ inline bool isnan(T value)
 template<typename T>
 inline bool isinf(T value)
 {
-    return (value == std::numeric_limits<T>::infinity() || (-1*value) == std::numeric_limits<T>::infinity()) && std::numeric_limits<T>::has_infinity;
+	return (value == std::numeric_limits<T>::infinity() || (-1 * value) == std::numeric_limits<T>::infinity()) && std::numeric_limits<T>::has_infinity;
 }
-#else
+#endif
+#elif defined __APPLE__
 #include <cmath>
 #ifndef isnan
 #define isnan(x) std::isnan(x)
@@ -57,6 +59,9 @@ inline bool isinf(T value)
 #ifndef isinf
 #define isinf(x) std::isinf(x)
 #endif
+#endif
+#ifdef __android__
+#define isinf(x) std::isinf(x)
 #endif
 
 namespace QGC
@@ -75,17 +80,22 @@ const QColor colorDarkYellow(180, 180, 0);
 const QColor colorBackground("#050508");
 const QColor colorBlack(0, 0, 0);
 
-/** @brief Get the current ground time in microseconds */
+/**
+ * @brief Get the current ground time in microseconds.
+ * @note This does not have microsecond precision, it is limited to millisecond precision.
+ */
 quint64 groundTimeUsecs();
 /** @brief Get the current ground time in milliseconds */
 quint64 groundTimeMilliseconds();
-/** @brief Get the current ground time in seconds */
+/** 
+ * @brief Get the current ground time in fractional seconds
+ * @note Precision is limited to milliseconds.
+ */
 qreal groundTimeSeconds();
 /** @brief Returns the angle limited to -pi - pi */
 float limitAngleToPMPIf(float angle);
 /** @brief Returns the angle limited to -pi - pi */
 double limitAngleToPMPId(double angle);
-int applicationVersion();
 
 const static int MAX_FLIGHT_TIME = 60 * 60 * 24 * 21;
 

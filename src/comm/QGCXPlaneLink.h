@@ -39,7 +39,7 @@ This file is part of the QGROUNDCONTROL project
 #include <QTimer>
 #include <QProcess>
 #include <LinkInterface.h>
-#include <configuration.h>
+#include "QGCConfig.h"
 #include "UASInterface.h"
 #include "QGCHilLink.h"
 
@@ -91,19 +91,6 @@ public:
         AIRFRAME_FIXED_WING_BIXLER_II_AILERONS
     };
 
-public slots:
-//    void setAddress(QString address);
-    void setPort(int port);
-    /** @brief Add a new host to broadcast messages to */
-    void setRemoteHost(const QString& host);
-    /** @brief Send new control states to the simulation */
-    void updateControls(uint64_t time, float rollAilerons, float pitchElevator, float yawRudder, float throttle, uint8_t systemMode, uint8_t navMode);
-    /** @brief Send new motor control states to the simulation */
-    void updateActuators(uint64_t time, float act1, float act2, float act3, float act4, float act5, float act6, float act7, float act8);
-    /** @brief Set the simulator version as text string */
-    void setVersion(const QString& version);
-    /** @brief Set the simulator version as integer */
-    void setVersion(unsigned int version);
     QString getVersion()
     {
         return QString("X-Plane %1").arg(xPlaneVersion);
@@ -112,6 +99,30 @@ public slots:
     int getAirFrameIndex()
     {
         return (int)airframeID;
+    }
+
+    bool sensorHilEnabled() {
+        return _sensorHilEnabled;
+    }
+
+public slots:
+//    void setAddress(QString address);
+    void setPort(int port);
+    /** @brief Add a new host to broadcast messages to */
+    void setRemoteHost(const QString& host);
+    /** @brief Send new control states to the simulation */
+    void updateControls(quint64 time, float rollAilerons, float pitchElevator, float yawRudder, float throttle, quint8 systemMode, quint8 navMode);
+    /** @brief Send new motor control states to the simulation */
+    void updateActuators(quint64 time, float act1, float act2, float act3, float act4, float act5, float act6, float act7, float act8);
+    /** @brief Set the simulator version as text string */
+    void setVersion(const QString& version);
+    /** @brief Set the simulator version as integer */
+    void setVersion(unsigned int version);
+
+    void enableSensorHIL(bool enable) {
+        if (enable != _sensorHilEnabled)
+            _sensorHilEnabled = enable;
+            emit sensorHilChanged(enable);
     }
 
     void processError(QProcess::ProcessError err);
@@ -130,7 +141,7 @@ public slots:
      * @brief Select airplane model
      * @param plane the name of the airplane
      */
-    void selectPlane(const QString& plane);
+    void selectAirframe(const QString& airframe);
     /**
      * @brief Set the airplane position and attitude
      * @param lat
@@ -180,19 +191,28 @@ protected:
     bool attitudeReceived;
 
     float roll, pitch, yaw, rollspeed, pitchspeed, yawspeed;
-    double lat, lon, alt;
+    double lat, lon, alt, alt_agl;
     float vx, vy, vz, xacc, yacc, zacc;
-    float airspeed;
+    float ind_airspeed;
+    float true_airspeed;
     float groundspeed;
+    float xmag, ymag, zmag, abs_pressure, diff_pressure, pressure_alt, temperature;
+    float barometerOffsetkPa;
 
     float man_roll, man_pitch, man_yaw;
     QString airframeName;
     enum AIRFRAME airframeID;
     bool xPlaneConnected;
     unsigned int xPlaneVersion;
+    quint64 simUpdateLast;
+    quint64 simUpdateFirst;
+    quint64 simUpdateLastText;
+    quint64 simUpdateLastGroundTruth;
+    float simUpdateHz;
+    bool _sensorHilEnabled;
+    bool _should_exit;
 
     void setName(QString name);
-
 };
 
 #endif // QGCXPLANESIMULATIONLINK_H

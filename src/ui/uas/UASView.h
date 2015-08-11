@@ -32,7 +32,7 @@ This file is part of the QGROUNDCONTROL project
 #ifndef UASVIEW_H
 #define UASVIEW_H
 
-#include <QtGui/QWidget>
+#include <QWidget>
 #include <QString>
 #include <QTimer>
 #include <QMouseEvent>
@@ -49,21 +49,27 @@ class UASView : public QWidget
 public:
     UASView(UASInterface* uas, QWidget *parent = 0);
     ~UASView();
+    UASInterface* uas;
 
 public slots:
     /** @brief Update the name of the system */
     void updateName(const QString& name);
     void receiveHeartbeat(UASInterface* uas);
     void updateThrust(UASInterface* uas, double thrust);
-    void updateBattery(UASInterface* uas, double voltage, double percent, int seconds);
+    void updateBattery(UASInterface* uas, double voltage, double current, double percent, int seconds);
     void updateLocalPosition(UASInterface*, double x, double y, double z, quint64 usec);
-    void updateGlobalPosition(UASInterface*, double lon, double lat, double alt, quint64 usec);
+    void updateGlobalPosition(UASInterface*, double lon, double lat, double altAMSL, double altWGS84, quint64 usec);
     void updateSpeed(UASInterface*, double x, double y, double z, quint64 usec);
     void updateState(UASInterface*, QString uasState, QString stateDescription);
     /** @brief Update the MAV mode */
     void updateMode(int sysId, QString status, QString description);
     void updateLoad(UASInterface* uas, double load);
     //void receiveValue(int uasid, QString id, double value, quint64 time);
+    /**
+     * Request that the UASManager deletes this UAS. This doesn't delete this widget
+     * yet, it waits for the approprait uasDeleted signal.
+     */
+    void triggerUASDeletion();
     void refresh();
     /** @brief Receive new waypoint information */
     void setWaypoint(int uasId, int id, double x, double y, double z, double yaw, bool autocontinue, bool current);
@@ -79,8 +85,6 @@ public slots:
     void updateActiveUAS(UASInterface* uas, bool active);
     /** @brief Set the widget into critical mode */
     void heartbeatTimeout(bool timeout, unsigned int ms);
-    /** @brief Set the background color for the widget */
-    void setBackgroundColor();
     /** @brief Bring up the dialog to rename the system */
     void rename();
     /** @brief Select airframe for this vehicle */
@@ -99,9 +103,9 @@ protected:
     quint64 startTime;
     bool timeout;
     bool iconIsRed;
+    bool disconnected;
     int timeRemaining;
     float chargeLevel;
-    UASInterface* uas;
     float load;
     QString state;
     QString stateDesc;
@@ -130,25 +134,23 @@ protected:
     bool lowPowerModeEnabled; ///< Low power mode reduces update rates
     unsigned int generalUpdateCount; ///< Skip counter for updates
     double filterTime; ///< Filter time estimate of battery
-
-
-    void mouseDoubleClickEvent (QMouseEvent * event);
-    /** @brief Mouse enters the widget */
-    void enterEvent(QEvent* event);
-    /** @brief Mouse leaves the widget */
-    void leaveEvent(QEvent* event);
-    /** @brief Start widget updating */
-    void showEvent(QShowEvent* event);
-    /** @brief Stop widget updating */
-    void hideEvent(QHideEvent* event);
-    void contextMenuEvent(QContextMenuEvent* event);
+    /**
+     * If a user double-clicks on this view, set the active UAS to this one.
+     */
+    void mouseDoubleClickEvent(QMouseEvent *event);
+    /**
+     * Right-clicking on the view provides a custom menu for interacting
+     * with the UAS.
+     */
+    void contextMenuEvent(QContextMenuEvent *event);
 
 private:
     Ui::UASView *m_ui;
 
-signals:
-    void uasInFocus(UASInterface* uas);
-    void uasOutFocus(UASInterface* uas);
+    /**
+     * Implement paintEvent() so that stylesheets work for our custom widget.
+     */
+    virtual void paintEvent(QPaintEvent *event);
 };
 
 #endif // UASVIEW_H

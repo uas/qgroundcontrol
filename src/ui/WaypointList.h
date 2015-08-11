@@ -34,7 +34,7 @@ This file is part of the QGROUNDCONTROL project
 #ifndef WAYPOINTLIST_H
 #define WAYPOINTLIST_H
 
-#include <QtGui/QWidget>
+#include <QWidget>
 #include <QMap>
 #include <QVBoxLayout>
 #include <QTimer>
@@ -42,9 +42,6 @@ This file is part of the QGROUNDCONTROL project
 #include "UASInterface.h"
 #include "WaypointEditableView.h"
 #include "WaypointViewOnlyView.h"
-#include "UnconnectedUASInfoWidget.h"
-//#include "PopupMessage.h"
-
 
 namespace Ui
 {
@@ -56,7 +53,7 @@ class WaypointList : public QWidget
     Q_OBJECT
     Q_DISABLE_COPY(WaypointList)
 public:
-    WaypointList(QWidget* parent = NULL, UASInterface* uas = NULL);
+    WaypointList(QWidget* parent = NULL, UASWaypointManager* wpm = NULL);
     virtual ~WaypointList();
 
 public slots:
@@ -77,9 +74,11 @@ public slots:
     /** @brief Read the remote waypoint list to "view"-tab only*/
     void refresh();
     /** @brief Add a waypoint to "edit"-tab */
-    void addEditable(); 
+    void addEditable();
+    /** @brief Add a waypoint to "edit"-tab on current MAV position or on generic position (home) */
+    void addEditable(bool onCurrentPosition);
     /** @brief Add a waypoint at the current MAV position */
-    int addCurrentPositionWaypoint();
+    void addCurrentPositionWaypoint();
     /** @brief Add a waypoint by mouse click over the map */
 
     //Update events

@@ -20,7 +20,7 @@
 #include "WaypointEditableView.h"
 #include "ui_WaypointEditableView.h"
 
-
+#include "MainWindow.h"
 #include "mission/QGCMissionNavWaypoint.h"
 #include "mission/QGCMissionNavLoiterUnlim.h"
 #include "mission/QGCMissionNavLoiterTurns.h"
@@ -38,12 +38,11 @@
 
 WaypointEditableView::WaypointEditableView(Waypoint* wp, QWidget* parent) :
     QWidget(parent),
+    wp(wp),
     viewMode(QGC_WAYPOINTEDITABLEVIEW_MODE_DEFAULT),
     m_ui(new Ui::WaypointEditableView)
 {
     m_ui->setupUi(this);
-
-    this->wp = wp;
     connect(wp, SIGNAL(destroyed(QObject*)), this, SLOT(deleted(QObject*)));
 
     // CUSTOM COMMAND WIDGET
@@ -61,7 +60,7 @@ WaypointEditableView::WaypointEditableView(Waypoint* wp, QWidget* parent) :
     MissionNavTakeoffWidget = NULL;
     MissionNavSweepWidget = NULL;
     MissionConditionDelayWidget = NULL;
-    MissionDoJumpWidget = NULL;    
+    MissionDoJumpWidget = NULL;
     MissionDoStartSearchWidget = NULL;
     MissionDoFinishSearchWidget = NULL;
     MissionOtherWidget = NULL;
@@ -78,19 +77,20 @@ WaypointEditableView::WaypointEditableView(Waypoint* wp, QWidget* parent) :
     //m_ui->comboBox_action->addItem(tr("NAV: Target"),MAV_CMD_NAV_TARGET);
     m_ui->comboBox_action->addItem(tr("IF: Delay over"),MAV_CMD_CONDITION_DELAY);
     //m_ui->comboBox_action->addItem(tr("IF: Yaw angle is"),MAV_CMD_CONDITION_YAW);
-    m_ui->comboBox_action->addItem(tr("DO: Jump to Index"),MAV_CMD_DO_JUMP);    
-#ifdef MAVLINK_ENABLED_PIXHAWK
-    m_ui->comboBox_action->addItem(tr("NAV: Sweep"),MAV_CMD_NAV_SWEEP);
-    m_ui->comboBox_action->addItem(tr("Do: Start Search"),MAV_CMD_DO_START_SEARCH);
-    m_ui->comboBox_action->addItem(tr("Do: Finish Search"),MAV_CMD_DO_FINISH_SEARCH);
-#endif
+    m_ui->comboBox_action->addItem(tr("DO: Jump to Index"),MAV_CMD_DO_JUMP);
     m_ui->comboBox_action->addItem(tr("Other"), MAV_CMD_ENUM_END);
 
     // add frames
     m_ui->comboBox_frame->addItem("Global/Abs. Alt",MAV_FRAME_GLOBAL);
     m_ui->comboBox_frame->addItem("Global/Rel. Alt", MAV_FRAME_GLOBAL_RELATIVE_ALT);
     m_ui->comboBox_frame->addItem("Local(NED)",MAV_FRAME_LOCAL_NED);
+    m_ui->comboBox_frame->addItem("Local Offset(NED)",MAV_FRAME_LOCAL_OFFSET_NED);
     m_ui->comboBox_frame->addItem("Mission",MAV_FRAME_MISSION);
+
+    // We do not want users to mess with the current waypoint in missions -
+    // they have to use the one downloaded from the MAV to change the current WP.
+    m_ui->selectedBox->setVisible(false);
+    connect(m_ui->selectedBox, SIGNAL(stateChanged(int)), this, SLOT(changedCurrent(int)));
 
     // Initialize view correctly
     int actionID = wp->getAction();
@@ -109,7 +109,6 @@ WaypointEditableView::WaypointEditableView(Waypoint* wp, QWidget* parent) :
     connect(m_ui->removeButton, SIGNAL(clicked()), this, SLOT(remove()));
 
     connect(m_ui->autoContinue, SIGNAL(stateChanged(int)), this, SLOT(changedAutoContinue(int)));
-    connect(m_ui->selectedBox, SIGNAL(stateChanged(int)), this, SLOT(changedCurrent(int)));
     connect(m_ui->comboBox_action, SIGNAL(activated(int)), this, SLOT(changedAction(int)));
     connect(m_ui->comboBox_frame, SIGNAL(activated(int)), this, SLOT(changedFrame(int)));
 
@@ -141,7 +140,7 @@ void WaypointEditableView::changedAutoContinue(int state)
 }
 
 void WaypointEditableView::updateActionView(int action)
-{    
+{
     //Hide all
     if(MissionNavWaypointWidget) MissionNavWaypointWidget->hide();
     if(MissionNavLoiterUnlimWidget) MissionNavLoiterUnlimWidget->hide();
@@ -188,17 +187,6 @@ void WaypointEditableView::updateActionView(int action)
         case MAV_CMD_DO_JUMP:
             if(MissionDoJumpWidget) MissionDoJumpWidget->show();
             break;
-        #ifdef MAVLINK_ENABLED_PIXHAWK
-        case MAV_CMD_NAV_SWEEP:
-            if(MissionNavSweepWidget) MissionNavSweepWidget->show();
-            break;
-        case MAV_CMD_DO_START_SEARCH:
-            if(MissionDoStartSearchWidget) MissionDoStartSearchWidget->show();
-            break;
-        case MAV_CMD_DO_FINISH_SEARCH:
-            if(MissionDoFinishSearchWidget) MissionDoFinishSearchWidget->show();
-            break;
-        #endif
 
         default:
             if(MissionOtherWidget) MissionOtherWidget->show();
@@ -302,29 +290,6 @@ void WaypointEditableView::initializeActionView(int actionID)
             m_ui->customActionWidget->layout()->addWidget(MissionDoJumpWidget);
         }
         break;
- #ifdef MAVLINK_ENABLED_PIXHAWK
-    case MAV_CMD_NAV_SWEEP:
-        if (!MissionNavSweepWidget)
-        {
-            MissionNavSweepWidget = new QGCMissionNavSweep(this);
-            m_ui->customActionWidget->layout()->addWidget(MissionNavSweepWidget);
-        }
-        break;
-    case MAV_CMD_DO_START_SEARCH:
-        if (!MissionDoStartSearchWidget)
-        {
-            MissionDoStartSearchWidget = new QGCMissionDoStartSearch(this);
-            m_ui->customActionWidget->layout()->addWidget(MissionDoStartSearchWidget);
-        }
-        break;
-    case MAV_CMD_DO_FINISH_SEARCH:
-        if (!MissionDoFinishSearchWidget)
-        {
-            MissionDoFinishSearchWidget = new QGCMissionDoFinishSearch(this);
-            m_ui->customActionWidget->layout()->addWidget(MissionDoFinishSearchWidget);
-        }
-        break;
-#endif
     case MAV_CMD_ENUM_END:
     default:
         if (!MissionOtherWidget)
@@ -338,6 +303,9 @@ void WaypointEditableView::initializeActionView(int actionID)
 
 void WaypointEditableView::deleted(QObject* waypoint)
 {
+    // Do not dynamic cast or de-reference QObject, since object is either in destructor or may have already
+    // been destroyed.
+
     Q_UNUSED(waypoint);
 }
 
@@ -349,25 +317,28 @@ void WaypointEditableView::changedFrame(int index)
 }
 
 void WaypointEditableView::changedCurrent(int state)
-{    
+{
     if (state == 0)
     {
         if (wp->getCurrent() == true) //User clicked on the waypoint, that is already current
-        {            
+        {
             m_ui->selectedBox->setChecked(true);
             m_ui->selectedBox->setCheckState(Qt::Checked);
         }
         else
-        {            
+        {
             m_ui->selectedBox->setChecked(false);
-            m_ui->selectedBox->setCheckState(Qt::Unchecked);            
+            m_ui->selectedBox->setCheckState(Qt::Unchecked);
         }
     }
     else
-    {       
+    {
         wp->setCurrent(true);
-        emit changeCurrentWaypoint(wp->getId());   //the slot changeCurrentWaypoint() in WaypointList sets all other current flags to false
-    }    
+        // At this point we do not consider this signal
+        // to be valid / the edit check boxes should not change the view state
+        //emit changeCurrentWaypoint(wp->getId());
+        //the slot changeCurrentWaypoint() in WaypointList sets all other current flags to false
+    }
 }
 
 void WaypointEditableView::updateValues()
@@ -446,14 +417,14 @@ void WaypointEditableView::updateValues()
 
 
     // update frame
-    MAV_FRAME frame = wp->getFrame();
+    MAV_FRAME frame = (MAV_FRAME)wp->getFrame();
     int frame_index = m_ui->comboBox_frame->findData(frame);
     if (m_ui->comboBox_frame->currentIndex() != frame_index) {
-        m_ui->comboBox_frame->setCurrentIndex(frame_index);        
+        m_ui->comboBox_frame->setCurrentIndex(frame_index);
     }
 
     // Update action
-    MAV_CMD action = wp->getAction();
+    MAV_CMD action = (MAV_CMD)wp->getAction();
     int action_index = m_ui->comboBox_action->findData(action);
     if (m_ui->comboBox_action->currentIndex() != action_index)
     {
@@ -470,7 +441,7 @@ void WaypointEditableView::updateValues()
     }
 
     emit commandBroadcast(wp->getAction());
-    emit frameBroadcast(wp->getFrame());
+    emit frameBroadcast((MAV_FRAME)wp->getFrame());
     emit param1Broadcast(wp->getParam1());
     emit param2Broadcast(wp->getParam2());
     emit param3Broadcast(wp->getParam3());
@@ -482,47 +453,31 @@ void WaypointEditableView::updateValues()
 
     if (m_ui->selectedBox->isChecked() != wp->getCurrent())
     {
+        // This is never a reason to emit a changed signal
+        m_ui->selectedBox->blockSignals(true);
         m_ui->selectedBox->setChecked(wp->getCurrent());
+        m_ui->selectedBox->blockSignals(false);
     }
     if (m_ui->autoContinue->isChecked() != wp->getAutoContinue())
     {
         m_ui->autoContinue->setChecked(wp->getAutoContinue());
     }
-    m_ui->idLabel->setText(QString("%1").arg(wp->getId()));
 
+    m_ui->idLabel->setText(QString::number(wp->getId()));
 
-
-    QColor backGroundColor = QGC::colorBackground;
-
+    // Style alternating rows of Missions as lighter/darker.
     static int lastId = -1;
     int currId = wp->getId() % 2;
-
     if (currId != lastId)
     {
-
-        // qDebug() << "COLOR ID: " << currId;
         if (currId == 1)
         {
-            //backGroundColor = backGroundColor.lighter(150);
-            backGroundColor = QColor("#252528").lighter(150);
+            this->setProperty("RowColoring", "odd");
         }
         else
         {
-            backGroundColor = QColor("#252528").lighter(250);
+            this->setProperty("RowColoring", "even");
         }
-        // qDebug() << "COLOR:" << backGroundColor.name();
-
-        // Update color based on id
-        QString groupBoxStyle = QString("QGroupBox {padding: 0px; margin: 0px; border: 0px; background-color: %1; }").arg(backGroundColor.name());
-        QString labelStyle = QString("QWidget {background-color: %1; color: #DDDDDF; border-color: #EEEEEE; }").arg(backGroundColor.name());
-        QString checkBoxStyle = QString("QCheckBox {background-color: %1; color: #454545; border-color: #EEEEEE; }").arg(backGroundColor.name());
-        QString widgetSlotStyle = QString("QWidget {background-color: %1; color: #DDDDDF; border-color: #EEEEEE; } QSpinBox {background-color: #252528 } QDoubleSpinBox {background-color: #252528 } QComboBox {background-color: #252528 }").arg(backGroundColor.name()); //FIXME There should be a way to declare background color for widgetSlot without letting the children inherit this color. Here, background color for every widget-type (QSpinBox, etc.) has to be declared separately to overrule the coloring of QWidget.
-
-        m_ui->autoContinue->setStyleSheet(checkBoxStyle);
-        m_ui->selectedBox->setStyleSheet(checkBoxStyle);
-        m_ui->idLabel->setStyleSheet(labelStyle);
-        m_ui->groupBox->setStyleSheet(groupBoxStyle);
-        m_ui->customActionWidget->setStyleSheet(widgetSlotStyle);
         lastId = currId;
     }
 
@@ -594,9 +549,12 @@ void WaypointEditableView::updateValues()
 
 void WaypointEditableView::setCurrent(bool state)
 {
-    m_ui->selectedBox->blockSignals(true);
-    m_ui->selectedBox->setChecked(state);
-    m_ui->selectedBox->blockSignals(false);
+    if (m_ui->selectedBox->isChecked() != state)
+    {
+        m_ui->selectedBox->blockSignals(true);
+        m_ui->selectedBox->setChecked(state);
+        m_ui->selectedBox->blockSignals(false);
+    }
 }
 
 
@@ -651,3 +609,14 @@ void WaypointEditableView::changeEvent(QEvent *e)
         break;
     }
 }
+
+/**
+ * Implement paintEvent() so that stylesheets work for our custom widget.
+ */
+void WaypointEditableView::paintEvent(QPaintEvent *)
+ {
+     QStyleOption opt;
+     opt.init(this);
+     QPainter p(this);
+     style()->drawPrimitive(QStyle::PE_Widget, &opt, &p, this);
+ }
